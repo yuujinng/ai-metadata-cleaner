@@ -27,3 +27,5 @@ jobs:
         run: python tests/run_tests.py
       - name: GUI 冒烟测试
         run: python tests/gui_smoke.py
+      - name: CLI 冒烟测试
+        run: python tests/cli_smoke.py

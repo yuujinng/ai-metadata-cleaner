@@ -23,6 +23,7 @@
 - 🧽 **彻底清除** — 作者、最后修改者、应用程序、创建/修改时间、编辑统计、公司、自定义属性、PDF 的 Info 字典与 XMP 元数据包……
 - ✏️ **随意修改** — 任意属性改成任意值，支持"应用到所有文件"批量统一，日期自动转成文档标准格式
 - 🖱️ **拖拽即用** — 文件或整个文件夹（递归扫描）直接拖进窗口
+- 🖥️ **命令行模式** — `scan` / `clean` / `set` 子命令，支持批量与脚本自动化，与 GUI 共用同一套核心逻辑
 - 🔒 **正文零损伤** — 只改写属性部件，文档内容逐字节保留；覆盖模式先写临时文件再原子替换，失败不伤原文件
 - 📦 **零安装门槛** — 双击 `bat` 启动，缺什么组件自动联网补装一次
 
@@ -77,6 +78,28 @@ python doc_meta_cleaner.py
 - 点**撤销全部修改**可取消尚未处理的修改项；
 - PDF 的 XMP 元数据包不支持逐项编辑，只能整体清除；但修改/清除 Info 字段时会自动同步 XMP，不会残留旧值。
 
+## ⌨️ 命令行用法
+
+不开界面也能用——命令行与 GUI 共用同一套核心逻辑，方便批量处理和脚本集成：
+
+```bash
+# 扫描：列出属性，疑似 AI 痕迹会被标出（目录会递归展开）
+python doc_meta_cli.py scan 文档.docx
+python doc_meta_cli.py scan D:\资料\
+
+# 清理：默认只清疑似 AI 痕迹，另存副本（原名_已清理）
+python doc_meta_cli.py clean D:\资料\
+python doc_meta_cli.py clean 文档.pdf --mode overwrite                # 覆盖原文件
+python doc_meta_cli.py clean 文档.docx --fields all                   # 清除全部属性
+python doc_meta_cli.py clean 文档.docx --fields creator,创建时间       # 指定字段（key 或中文名均可）
+
+# 修改：字段=值，值留空表示清除该字段；可一次列出多个文件
+python doc_meta_cli.py set 报告.docx creator=张三
+python doc_meta_cli.py set 报告.docx created="2026-10-20 10:00:05" --mode overwrite
+
+python doc_meta_cli.py --list-fields    # 查看全部可操作的字段
+```
+
 ## 📂 支持的格式
 
 | 类型 | 扩展名 | 清除 | 修改 |
@@ -111,7 +134,8 @@ python doc_meta_cleaner.py
 
 ```
 doc-meta-cleaner/
-├── doc_meta_cleaner.py       主程序（核心逻辑 + 界面）
+├── doc_meta_cleaner.py       核心逻辑 + 图形界面
+├── doc_meta_cli.py           命令行入口（scan / clean / set）
 ├── 文档属性清理工具.bat        双击启动
 ├── 示例文件/                  4 个带 AI 痕迹的演示文档，可先拿它们试手
 ├── docs/
@@ -119,9 +143,12 @@ doc-meta-cleaner/
 ├── tests/
 │   ├── run_tests.py          核心逻辑自动化测试
 │   ├── gui_smoke.py          GUI 冒烟测试
+│   ├── cli_smoke.py          CLI 冒烟测试
 │   ├── _make_bat.py          重新生成启动器
 │   └── _make_screenshot.py   重新生成 README 截图
-└── .github/workflows/ci.yml  GitHub Actions CI
+└── .github/
+    ├── ISSUE_TEMPLATE/       Issue 模板
+    └── workflows/            CI 与 Release（打 v* 标签自动发布）
 ```
 
 ## 🛠️ 开发与测试
@@ -129,9 +156,12 @@ doc-meta-cleaner/
 ```bash
 python tests/run_tests.py         # 核心逻辑测试（自动生成样例并验证清理结果）
 python tests/gui_smoke.py         # GUI 冒烟测试
+python tests/cli_smoke.py         # CLI 冒烟测试
 python tests/_make_screenshot.py  # 重新生成 README 截图
 python tests/_make_bat.py         # 重新生成启动器（保持 ASCII + CRLF）
 ```
+
+发版：推送 `vX.Y.Z` 标签后，Release 工作流会自动跑全量测试并发布带源码包的 GitHub Release。
 
 ## 📄 许可证
 

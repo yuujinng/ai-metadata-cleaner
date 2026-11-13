@@ -1,0 +1,29 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 发布前跑全量测试
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          pip install pypdf tkinterdnd2
+          python tests/run_tests.py
+          python tests/gui_smoke.py
+          python tests/cli_smoke.py
+      - name: 打包源码 zip（遵循 .gitattributes）
+        run: git archive --format=zip --output doc-meta-cleaner-${{ github.ref_name }}.zip HEAD
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: doc-meta-cleaner-*.zip
+          generate_release_notes: true

@@ -1,0 +1,48 @@
+name: 问题反馈
+description: 报告工具运行中的问题
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈！请尽量填写以下信息，便于定位问题。
+        提交前可以先看 [README 的常见问题](../../#常见问题) 是否已覆盖。
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 发生了什么？
+      description: 期望的行为 vs 实际的行为
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: 操作系统
+      options:
+        - Windows 11
+        - Windows 10
+        - 其他（请在描述里注明）
+    validations:
+      required: true
+  - type: dropdown
+    id: format
+    attributes:
+      label: 涉及的文件格式
+      options:
+        - .docx / .docm
+        - .xlsx / .xlsm
+        - .pptx / .pptm / .ppsx / .ppsm
+        - .pdf
+        - 多种 / 其他
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志或截图
+      description: 界面日志区或命令行的报错内容
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 从添加文件到出问题的完整操作

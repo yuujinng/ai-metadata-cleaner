@@ -12,6 +12,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
       - name: 发布前跑全量测试
         env:
           PYTHONIOENCODING: utf-8
@@ -22,8 +25,26 @@ jobs:
           python tests/cli_smoke.py
       - name: 打包源码 zip（遵循 .gitattributes）
         run: git archive --format=zip --output doc-meta-cleaner-${{ github.ref_name }}.zip HEAD
+      - name: 构建 Windows 单文件 exe（无需安装 Python）
+        env:
+          PYI_VERSION: ${{ github.ref_name }}
+        run: |
+          pip install pyinstaller
+          pyinstaller --noconfirm doc_meta_cleaner.spec
+      - name: exe 冒烟测试
+        run: |
+          Copy-Item "dist/文档属性清理工具.exe" "$env:TEMP\smoke_app.exe"
+          $p = Start-Process "$env:TEMP\smoke_app.exe" -PassThru
+          Start-Sleep -Seconds 15
+          $wins = Get-Process | Where-Object { $_.MainWindowTitle -like '*文档属性清理工具*' }
+          if (-not $wins) { Write-Error "exe 启动后主窗口未出现"; exit 1 }
+          Write-Output "窗口正常：$($wins[0].MainWindowTitle)"
+          $wins | Stop-Process -Force -ErrorAction SilentlyContinue
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
       - name: 创建 GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: doc-meta-cleaner-*.zip
+          files: |
+            doc-meta-cleaner-*.zip
+            dist/文档属性清理工具.exe
           generate_release_notes: true

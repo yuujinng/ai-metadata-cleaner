@@ -115,14 +115,14 @@ _AI_VALUE_PATTERN = re.compile(
     + _L + r"gpt[\s-]?\d|"
     + _L + r"claude" + _R + r"|anthropic|"
     + _L + r"gemini" + _R + r"|copilot|deepseek|"
-    + _L + r"qwen" + _R + r"|通义|千问|"
-    + _L + r"kimi" + _R + r"|moonshot|doubao|豆包|文心|"
+    + _L + r"qwen" + _R + r"|"
+    + _L + r"kimi" + _R + r"|moonshot|doubao|"
     + _L + r"ernie" + _R + r"|"
     + _L + r"llama" + _R + r"|"
     + _L + r"grok" + _R + r"|"
     + _L + r"xai" + _R + r"|"
-    + _L + r"x\.ai" + _R + r"|mistral|zhipu|智谱|z\.ai|bigmodel|"
-    + _L + r"glm" + _R + r"|hunyuan|混元|星火|sparkdesk|讯飞|灵犀|"
+    + _L + r"x\.ai" + _R + r"|mistral|zhipu|z\.ai|bigmodel|"
+    + _L + r"glm" + _R + r"|sparkdesk|"
     r"python-docx|python-pptx|openpyxl|xlsxwriter|reportlab|"
     + _L + r"fpdf" + _R + r"|weasyprint|pandoc|apache\s+poi|skia/?pdf|"
     r"notion\.so|gamma\.app|beautiful\.ai|tome\.app|wps\s*ai" + _R + r"|"
@@ -131,12 +131,41 @@ _AI_VALUE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# 弱信号：中文产品名与普通词同形（星火计划、心有灵犀、文心雕龙、豆包……），
+# 在标题/关键词里直接匹配会大量误报，只在身份字段参与判断
+_WEAK_AI_PATTERN = re.compile(r"通义|千问|豆包|文心|混元|星火|灵犀|智谱|讯飞")
 
-def looks_like_ai(value):
-    """值里是否带有 AI 工具或脚本生成库的痕迹。"""
+
+# 身份字段：值里出现生成器名称即视为痕迹
+AI_IDENTITY_FIELDS = {
+    'creator', 'lastModifiedBy', 'Application', 'AppVersion', 'Company', 'Manager',
+    'pdf:Author', 'pdf:Creator', 'pdf:Producer',
+}
+
+
+def is_identity_field(key):
+    return key in AI_IDENTITY_FIELDS or key.startswith('custom:')
+
+
+def is_auto_checkable(key):
+    """自动勾选白名单：身份字段 + 时间/统计类规则字段 + PDF 内嵌元数据包。
+
+    标题、关键词等正文类字段即便命中关键词也只标红提示，避免误删。
+    """
+    return is_identity_field(key) or key in ('created', 'modified', 'TotalTime',
+                                             XMP_KEY, PAGEMETA_KEY)
+
+
+def looks_like_ai(value, strict=False):
+    """值里是否带有 AI 工具或脚本生成库的痕迹。
+
+    strict=True 用于作者/应用程序等身份字段：中文产品名等弱信号也算数。
+    """
     if not value:
         return False
-    return bool(_AI_VALUE_PATTERN.search(value))
+    if _AI_VALUE_PATTERN.search(value):
+        return True
+    return strict and bool(_WEAK_AI_PATTERN.search(value))
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +179,12 @@ _DT_COMPACT = re.compile(r'^(?:D:)?(\d{4})(\d{1,2})(\d{1,2})(\d{1,2})?:?(\d{1,2}
 
 
 def _parse_dt(s):
-    """把用户输入解析为 datetime；兼容 ISO、带空格、纯数字日期、PDF D: 前缀。"""
+    """把用户输入解析为 UTC datetime；兼容 ISO、带空格、纯数字日期、PDF D: 前缀。
+
+    不带时区的输入按本地墙钟时间理解，转换成 UTC 存储，保证 Word/PDF 里
+    显示的时间与用户输入一致；PDF 的 D: 前缀无时区后缀时按 PDF 规范
+    （缺省偏移即 UT）直接视为 UTC。
+    """
     s = (s or '').strip()
     if not s:
         return None
@@ -162,15 +196,17 @@ def _parse_dt(s):
             dt = datetime(int(y), int(mo), int(d), int(h), int(mi), int(se))
         except ValueError:
             return None
-        return dt.replace(tzinfo=timezone.utc) if ends_utc else dt
+        if s[:2].upper() == 'D:':
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.replace(tzinfo=timezone.utc) if ends_utc else dt.astimezone(timezone.utc)
     t = s[:-1] if ends_utc and s.endswith(('Z', 'z')) else s
     try:
         dt = datetime.fromisoformat(t.replace(' ', 'T'))
     except ValueError:
         return None
-    if ends_utc:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc) if dt.tzinfo else dt
+    if dt.tzinfo:
+        return dt.astimezone(timezone.utc)
+    return dt.replace(tzinfo=timezone.utc) if ends_utc else dt.astimezone(timezone.utc)
 
 
 def normalize_edit_value(kind, key, raw):
@@ -256,7 +292,7 @@ def read_ooxml_props(path):
 
     # 规则化判断疑似痕迹
     for key, val in props.items():
-        if looks_like_ai(val):
+        if looks_like_ai(val, strict=is_identity_field(key)):
             suspects.add(key)
     # 创建时间 == 修改时间（精确到秒）：典型的机器一次性生成
     if props.get('created') and props.get('created') == props.get('modified'):
@@ -542,7 +578,7 @@ def read_pdf_props(path):
         pass
 
     for key, val in props.items():
-        if looks_like_ai(val):
+        if looks_like_ai(val, strict=is_identity_field(key)):
             suspects.add(key)
     try:
         xmp = reader.xmp_metadata
@@ -845,6 +881,53 @@ def _sorted_edited(edited_keys, set_ops):
                   key=lambda kv: field_sort_key(kv[0]))
 
 
+# ---------------------------------------------------------------------------
+# 文件系统时间保护
+# ---------------------------------------------------------------------------
+
+def _set_win_creation_time(path, ctime_ns):
+    """Windows 下设置文件创建时间（os.stat 的 st_ctime 即创建时间）。
+    最佳努力，失败返回 False。"""
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        kernel32.SetFileTime.argtypes = (ctypes.c_void_p,) * 4
+        kernel32.CreateFileW.restype = ctypes.c_void_p
+        # FILE_WRITE_ATTRIBUTES / 共享读写删 / OPEN_EXISTING
+        handle = kernel32.CreateFileW(str(path), 0x0100, 0x7, None, 3, 0, None)
+        if not handle or handle == ctypes.c_void_p(-1).value:
+            return False
+        try:
+            # FILETIME：1601-01-01 起的 100 纳秒数
+            ft = ctypes.c_ulonglong(int(ctime_ns) // 100 + 116444736000000000)
+            return bool(kernel32.SetFileTime(handle, ctypes.byref(ft), None, None))
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:
+        return False
+
+
+def _restore_file_times(path, st):
+    """覆盖模式：恢复访问/修改时间；Windows 连创建时间一并恢复，
+    让文件在系统层面看起来未被改动。"""
+    try:
+        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+    except OSError:
+        pass
+    if os.name == 'nt':
+        _set_win_creation_time(path, st.st_ctime_ns)
+
+
+def _copy_source_times(src, dst):
+    """副本模式：副本沿用原文件的访问/修改时间（与资源管理器复制行为一致），
+    避免副本以"刚刚生成"的时间戳暴露处理痕迹。"""
+    try:
+        st = os.stat(src)
+        os.utime(dst, ns=(st.st_atime_ns, st.st_mtime_ns))
+    except OSError:
+        pass
+
+
 def clean_file(entry, checked_keys, edits, mode):
     """按勾选字段与编辑项处理文件。mode: 'copy' 另存副本 / 'overwrite' 覆盖。
 
@@ -861,10 +944,12 @@ def clean_file(entry, checked_keys, edits, mode):
         return clean_pdf(a, b, delete_keys, set_ops)
 
     if mode == 'overwrite':
+        st = os.stat(path)
         tmp = path + '.meta_tmp'
         try:
             removed, edited = run(path, tmp)
             os.replace(tmp, path)
+            _restore_file_times(path, st)
         finally:
             if os.path.exists(path + '.meta_tmp'):
                 try:
@@ -881,6 +966,7 @@ def clean_file(entry, checked_keys, edits, mode):
         dest = base + '_已清理%d' % n + ext
         n += 1
     removed, edited = run(path, dest)
+    _copy_source_times(path, dest)
     return dest, removed, _sorted_edited(edited, set_ops)
 
 
@@ -940,7 +1026,7 @@ class CleanerApp(_Base):
         ttk.Button(bar, text='清空列表', command=self.clear_files).pack(side='left', padx=(6, 0))
         self.auto_check_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
-            bar, text='添加时自动勾选疑似 AI 痕迹',
+            bar, text='添加时自动勾选身份类痕迹（作者/程序/时间）',
             variable=self.auto_check_var).pack(side='right')
 
         # 主体：左文件列表 / 右属性表
@@ -1165,7 +1251,7 @@ class CleanerApp(_Base):
                 if entry is None:
                     was = prev.get(key)
                     suspect = key in f['suspects']
-                    checked = was['checked'] if was else (suspect and auto)
+                    checked = was['checked'] if was else (suspect and auto and is_auto_checkable(key))
                     new_fields[key] = {'name': field_display_name(key),
                                        'suspect': suspect, 'checked': checked}
                 elif key in f['suspects']:
@@ -1290,9 +1376,9 @@ class CleanerApp(_Base):
     # ---- 编辑属性 ---------------------------------------------------------
     def _edit_hint(self, kind, key):
         if kind == 'ooxml' and key in OOXML_DATE_FIELDS:
-            return '日期字段，格式如：2026-10-20 10:00:05（保存时自动转为文档标准格式）'
+            return '日期字段，格式如：2026-10-20 10:00:05（按本地时区理解，保存时自动转为文档标准 UTC 格式）'
         if kind == 'pdf' and key in PDF_DATE_FIELDS:
-            return '日期字段，格式如：2026-10-20 10:00:05（保存时自动转为 PDF 标准格式）'
+            return '日期字段，格式如：2026-10-20 10:00:05（按本地时区理解，保存时自动转为 PDF 标准 UTC 格式）'
         if key in INT_FIELDS:
             return '该字段需要非负整数（修订次数 / 编辑分钟数）'
         return '留空保存 = 清除该字段；否则将写入所输入的内容'

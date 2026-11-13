@@ -69,7 +69,10 @@ check('修改已生效', '张三' in r.stdout, r.stdout[:300])
 r = run('set', cleaned, 'created=2026-01-02 03:04:05', '--mode', 'overwrite')
 check('set 日期规范化', r.returncode == 0, (r.returncode, r.stdout[:200], r.stderr))
 r = run('scan', cleaned)
-check('日期已生效', '2026-01-02' in r.stdout, r.stdout[:300])
+# 本地墙钟输入按当前时区转成 UTC 存储，期望值动态计算
+from datetime import datetime, timezone
+expect_dt = datetime(2026, 1, 2, 3, 4, 5).astimezone(timezone.utc)
+check('日期已生效', expect_dt.strftime('%Y-%m-%dT%H:%M:%SZ') in r.stdout, r.stdout[:300])
 
 r = run('set', cleaned, 'created=明天下午', '--mode', 'overwrite')
 check('非法日期被拒（exit 1）', r.returncode == 1

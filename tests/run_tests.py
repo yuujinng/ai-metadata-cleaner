@@ -4,6 +4,7 @@ import os
 import shutil
 import sys
 import zipfile
+from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -295,16 +296,26 @@ def test_clean_pdf():
 # ---------------------------------------------------------------------------
 
 def test_normalize():
+    # 本地墙钟输入 -> UTC：期望值按当前时区动态计算，测试在任何时区都成立
+    naive_utc = datetime(2026, 1, 2, 3, 4, 5).astimezone(timezone.utc)
+    midnight_utc = datetime(2026, 1, 2).astimezone(timezone.utc)
     err, v = dmc.normalize_edit_value('ooxml', 'created', '2026-01-02 03:04:05')
-    check('ooxml 日期转换', err is None and v == '2026-01-02T03:04:05Z', (err, v))
+    check('ooxml 日期按本地时区转UTC',
+          err is None and v == naive_utc.strftime('%Y-%m-%dT%H:%M:%SZ'), (err, v, naive_utc))
     err, v = dmc.normalize_edit_value('ooxml', 'created', '2026-01-02')
-    check('纯日期转换', err is None and v == '2026-01-02T00:00:00Z', (err, v))
+    check('纯日期按本地时区转UTC',
+          err is None and v == midnight_utc.strftime('%Y-%m-%dT%H:%M:%SZ'), (err, v, midnight_utc))
     err, v = dmc.normalize_edit_value('ooxml', 'modified', '2026年1月2日 3:04')
     check('非法日期报错', err is not None and v is None, (err, v))
+    err, v = dmc.normalize_edit_value('ooxml', 'modified', '2026-03-04T05:06:07Z')
+    check('粘贴Z值往返一致', err is None and v == '2026-03-04T05:06:07Z', (err, v))
+    err, v = dmc.normalize_edit_value('ooxml', 'modified', '2026-03-04 05:06:07+08:00')
+    check('+08:00 输入转UTC', err is None and v == '2026-03-03T21:06:07Z', (err, v))
     err, v = dmc.normalize_edit_value('pdf', 'pdf:CreationDate', '2026-01-02 03:04:05')
-    check('pdf 日期转换', err is None and v == 'D:20260102030405Z', (err, v))
+    check('pdf 日期按本地时区转UTC',
+          err is None and v == 'D:' + naive_utc.strftime('%Y%m%d%H%M%SZ'), (err, v))
     err, v = dmc.normalize_edit_value('pdf', 'pdf:ModDate', 'D:20260102030405')
-    check('pdf D:格式输入', err is None and v == 'D:20260102030405Z', (err, v))
+    check('pdf D:无偏移按UTC', err is None and v == 'D:20260102030405Z', (err, v))
     err, v = dmc.normalize_edit_value('pdf', 'pdf:CreationDate', 'D:20261020100000Z')
     check('pdf D:格式带Z输入', err is None and v == 'D:20261020100000Z', (err, v))
     err, v = dmc.normalize_edit_value('ooxml', 'TotalTime', '90')
@@ -315,6 +326,58 @@ def test_normalize():
     check('自由文本', err is None and v == '张三', (err, v))
     err, v = dmc.normalize_edit_value('ooxml', 'creator', '')
     check('留空=删除', err is None and v == '', (err, v))
+
+
+def test_ai_rules():
+    check('强信号任何字段都判', dmc.looks_like_ai('由 ChatGPT 起草'))
+    check('弱信号内容字段不判', not dmc.looks_like_ai('星火计划简介'))
+    check('弱信号身份字段判为痕迹', dmc.looks_like_ai('星火大模型导出', strict=True))
+    check('心有灵犀不误报', not dmc.looks_like_ai('心有灵犀一点通'))
+    check('文心雕龙内容字段不判', not dmc.looks_like_ai('读《文心雕龙》笔记'))
+    check('文心一言身份字段判为痕迹', dmc.looks_like_ai('文心一言', strict=True))
+    check('豆包内容字段不判', not dmc.looks_like_ai('豆包很好吃'))
+    check('身份字段判定', dmc.is_identity_field('creator')
+          and dmc.is_identity_field('pdf:Producer')
+          and dmc.is_identity_field('custom:来源')
+          and not dmc.is_identity_field('title'))
+    check('自动勾选白名单', dmc.is_auto_checkable('TotalTime')
+          and dmc.is_auto_checkable('created') and dmc.is_auto_checkable('pdf:xmp')
+          and not dmc.is_auto_checkable('keywords') and not dmc.is_auto_checkable('title'))
+    # Claude Monet 等人名仍会标记（强信号无法安全排除），
+    # 但 title 不在自动勾选白名单，只会标红提示不会自动删除
+    check('Claude Monet 仍标记', dmc.looks_like_ai('Claude Monet 的名画'))
+
+
+def test_file_times():
+    import shutil as sh
+    src = os.path.join(OUT, 'times_src.docx')
+    # 副本模式：副本沿用原文件修改时间
+    sh.copy(os.path.join(OUT, 'sample.docx'), src)
+    st0 = os.stat(src)
+    dest, _, _ = dmc.clean_file(dmc.scan_file(src), ['creator'], {}, 'copy')
+    check('副本 mtime 沿用原文件',
+          os.stat(dest).st_mtime_ns == st0.st_mtime_ns,
+          (st0.st_mtime_ns, os.stat(dest).st_mtime_ns))
+    check('副本模式原文件时间未变', os.stat(src).st_mtime_ns == st0.st_mtime_ns)
+
+    # 覆盖模式：创建/修改/访问时间全部保留
+    sh.copy(os.path.join(OUT, 'sample.docx'), src)
+    if os.name == 'nt':
+        # 把创建时间设成明显的过去值，若恢复失败会跳变成"现在"，测试即可区分
+        past_ns = int(datetime(2020, 6, 1, 8, 0, 0, tzinfo=timezone.utc).timestamp() * 1e9)
+        dmc._set_win_creation_time(src, past_ns)
+    st1 = os.stat(src)
+    dmc.clean_file(dmc.scan_file(src), ['creator'], {}, 'overwrite')
+    st2 = os.stat(src)
+    check('覆盖模式 mtime 保留', st2.st_mtime_ns == st1.st_mtime_ns,
+          (st1.st_mtime_ns, st2.st_mtime_ns))
+    check('覆盖模式 atime 保留', st2.st_atime_ns == st1.st_atime_ns,
+          (st1.st_atime_ns, st2.st_atime_ns))
+    if os.name == 'nt':
+        check('覆盖模式创建时间保留(Windows)',
+              abs(st2.st_ctime_ns - st1.st_ctime_ns) < 1_000_000_000,
+              (st1.st_ctime_ns, st2.st_ctime_ns))
+    check('覆盖后 creator 已删除', 'creator' not in dmc.scan_file(src)['props'])
 
 
 def test_edit_ooxml():
@@ -560,13 +623,15 @@ def main():
     test_clean_copy()
     test_clean_overwrite()
     test_clean_pdf()
-    test_normalize()
     test_edit_ooxml()
     test_edit_apply_all_and_skip()
     test_edit_pdf()
     test_pdf_xmp_sync()
     test_xmp_rewrite_units()
     test_edit_missing_parts()
+    test_normalize()
+    test_ai_rules()
+    test_file_times()
     print()
     if FAILURES:
         print('FAILED:', len(FAILURES), '项未通过 ->', FAILURES)

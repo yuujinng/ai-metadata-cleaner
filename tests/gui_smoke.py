@@ -40,6 +40,10 @@ docx_entry = next(f for f in app.files if f['path'].endswith('.docx'))
 app.current_path = docx_entry['path']
 app._refresh_values()
 
+# 自动勾选白名单：身份字段自动勾选，内容字段只标红不自动勾选
+assert app.fields['creator']['checked'] is True, '身份字段(creator)应自动勾选'
+assert not app.fields['title']['checked'], '内容字段(title)不应自动勾选'
+
 # 勾选清除与编辑互斥
 app._toggle('title')
 assert app.fields['title']['checked'] is True
@@ -49,9 +53,11 @@ assert app.fields['creator']['checked'] is False, '编辑保存后应取消该�
 app._toggle('creator')  # 重新勾选清除 -> 待修改应被移除
 assert 'creator' not in app.edits, '勾选清除应移除同字段的待修改'
 
-# 日期自动规范化 + 应用到全部
+# 日期自动规范化（本地时区 -> UTC）+ 应用到全部
+from datetime import datetime, timezone
+expect = datetime(2026, 1, 2, 3, 4, 5).astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 ok, err = app._apply_edit('created', '2026-01-02 03:04:05', True)
-assert ok and app.edits['created']['value'] == '2026-01-02T03:04:05Z', (ok, err)
+assert ok and app.edits['created']['value'] == expect, (ok, err, expect)
 # 非法输入被拦截
 ok, err = app._apply_edit('created', '明天下午', False)
 assert not ok and err, (ok, err)

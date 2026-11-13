@@ -1,0 +1,16 @@
+# 默认按文本处理，提交时规范化行尾
+* text=auto
+
+# 启动器必须保持 CRLF（ASCII + CRLF 才能双击运行）
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制示例文档
+*.png binary
+*.pdf binary
+*.docx binary
+*.docm binary
+*.xlsx binary
+*.xlsm binary
+*.pptx binary
+*.ppsx binary

@@ -9,6 +9,9 @@ jobs:
   test:
     name: 测试（Python ${{ matrix.python-version }}）
     runs-on: windows-latest
+    # runner 是英文系统（cp1252），测试输出含中文，必须强制 UTF-8
+    env:
+      PYTHONIOENCODING: utf-8
     strategy:
       fail-fast: false
       matrix:

@@ -33,7 +33,7 @@ jobs:
           pyinstaller --noconfirm doc_meta_cleaner.spec
       - name: exe 冒烟测试
         run: |
-          Copy-Item "dist/文档属性清理工具.exe" "$env:TEMP\smoke_app.exe"
+          Copy-Item "dist/DocMetaCleaner.exe" "$env:TEMP\smoke_app.exe"
           $p = Start-Process "$env:TEMP\smoke_app.exe" -PassThru
           Start-Sleep -Seconds 15
           $wins = Get-Process | Where-Object { $_.MainWindowTitle -like '*文档属性清理工具*' }
@@ -46,5 +46,5 @@ jobs:
         with:
           files: |
             doc-meta-cleaner-*.zip
-            dist/文档属性清理工具.exe
+            dist/DocMetaCleaner.exe
           generate_release_notes: true

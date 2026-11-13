@@ -17,7 +17,10 @@ from PyInstaller.utils.win32.versioninfo import (
     VSVersionInfo,
 )
 
-APP_NAME = '文档属性清理工具'
+# exe 文件名必须保持 ASCII：GitHub Release 资产上传 API 不接受非 ASCII 名称，
+# 中文名会被 softprops/action-gh-release 降级成 default.exe。
+# 中文产品名保留在下方版本资源（右键 → 详细信息）里。
+APP_NAME = 'DocMetaCleaner'
 APP_VERSION = os.environ.get('PYI_VERSION', '1.0.0.0').lstrip('v')
 
 
@@ -74,7 +77,9 @@ a = Analysis(
     hiddenimports=tkdnd_hiddenimports,
     hookspath=[],
     runtime_hooks=[],
-    excludes=[],
+    # numpy 与本工具无关，但开发机全局环境若装了它会被 PyInstaller 顺着可选导入链
+    # 打进包里（带 6MB OpenBLAS DLL），本地构建体积暴涨；CI 干净环境无此问题
+    excludes=['numpy'],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

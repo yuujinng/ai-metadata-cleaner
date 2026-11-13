@@ -13,8 +13,11 @@
 
 原理：
   * .docx/.xlsx/.pptx（含 .docm/.xlsm/.pptm）是 ZIP+XML 包，
-    直接改写其中的 docProps/core.xml、app.xml、custom.xml，其余部件原样保留。
-  * .pdf 通过 pypdf 克隆后删除 Info 字典字段及 /Metadata(XMP)。
+    直接改写其中的 docProps/core.xml、app.xml、custom.xml，其余部件原样保留；
+    文件缺少属性部件时会按规范新建并登记，保证 Word/Excel/PPT 正常打开。
+  * .pdf 通过 pypdf 克隆后改写 Info 字典字段与 /Metadata(XMP)；修改/删除
+    Info 字段时会同步改写 XMP 包，避免旧值残留；挂在页面对象上的内嵌
+    元数据同样支持检测与清除。
 """
 
 import os
@@ -80,6 +83,8 @@ PDF_FIELDS = {
 
 XMP_KEY = 'pdf:xmp'
 XMP_NAME = 'XMP 元数据包（内嵌 XML，可能重复包含以上信息）'
+PAGEMETA_KEY = 'pdf:pagemeta'
+PAGEMETA_NAME = '页面级元数据（挂在页面对象上的内嵌 XML）'
 
 # 列表展示顺序
 FIELD_ORDER = [
@@ -141,7 +146,7 @@ def looks_like_ai(value):
 OOXML_DATE_FIELDS = ('created', 'modified', 'lastPrinted')
 PDF_DATE_FIELDS = ('pdf:CreationDate', 'pdf:ModDate')
 INT_FIELDS = ('revision', 'TotalTime')
-_DT_COMPACT = re.compile(r'^(?:D:)?(\d{4})(\d{1,2})(\d{1,2})(\d{1,2})?:?(\d{1,2})?:?(\d{1,2})?:?$')
+_DT_COMPACT = re.compile(r'^(?:D:)?(\d{4})(\d{1,2})(\d{1,2})(\d{1,2})?:?(\d{1,2})?:?(\d{1,2})?:?[Zz]?$')
 
 
 def _parse_dt(s):
@@ -338,6 +343,52 @@ def _set_or_create(root, key, value, part, extra_changed):
     return True
 
 
+# 缺失属性部件的新建模板与登记信息（保证 Word/Excel/PPT 正常打开）
+CORE_PART_TEMPLATE = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n'
+    '<cp:coreProperties xmlns:cp="%s" xmlns:dc="%s" xmlns:dcterms="%s" xmlns:xsi="%s"/>'
+) % (CP_NS, DC_NS, DCTERMS_NS, XSI_NS)
+APP_PART_TEMPLATE = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n'
+    '<Properties xmlns="%s" xmlns:vt="%s"/>'
+) % (APP_NS, VT_NS)
+CORE_CONTENT_TYPE = 'application/vnd.openxmlformats-package.core-properties+xml'
+APP_CONTENT_TYPE = 'application/vnd.openxmlformats-officedocument.extended-properties+xml'
+CORE_REL_TYPE = ('http://schemas.openxmlformats.org/package/2006/relationships'
+                 '/metadata/core-properties')
+APP_REL_TYPE = ('http://schemas.openxmlformats.org/officeDocument/2006'
+                '/relationships/extended-properties')
+CT_NS = 'http://schemas.openxmlformats.org/package/2006/content-types'
+RELS_NS = 'http://schemas.openxmlformats.org/package/2006/relationships'
+
+
+def _build_props_part(template, part, ops):
+    """按模板新建属性部件（core.xml / app.xml）并写入 ops 里的字段。"""
+    root = ET.fromstring(template)
+    for key, value in ops.items():
+        _set_or_create(root, key, value, part, False)
+    return _serialize(root, template.encode('utf-8'))
+
+
+def _register_part(ct_bytes, rels_bytes, part_name, content_type, rel_type):
+    """把新建部件登记进 [Content_Types].xml 与 _rels/.rels。返回 (ct, rels)。"""
+    ct_root = ET.fromstring(ct_bytes)
+    if not any(c.get('PartName') == '/' + part_name for c in ct_root):
+        ET.SubElement(ct_root, '{%s}Override' % CT_NS,
+                      {'PartName': '/' + part_name, 'ContentType': content_type})
+        ct_bytes = _serialize(ct_root, ct_bytes)
+    rel_root = ET.fromstring(rels_bytes)
+    if not any((c.get('Target') or '').lstrip('/') == part_name for c in rel_root):
+        used = {c.get('Id') for c in rel_root}
+        n = 1
+        while 'rId%d' % n in used:
+            n += 1
+        ET.SubElement(rel_root, '{%s}Relationship' % RELS_NS,
+                      {'Id': 'rId%d' % n, 'Type': rel_type, 'Target': part_name})
+        rels_bytes = _serialize(rel_root, rels_bytes)
+    return ct_bytes, rels_bytes
+
+
 def _rewrite_part(xml_bytes, wanted, part_ops, part):
     """对单个属性部件执行删除（wanted）与修改（part_ops: key -> value）。
 
@@ -383,7 +434,9 @@ def _rewrite_part(xml_bytes, wanted, part_ops, part):
 def clean_ooxml(src, dst, delete_keys, set_ops):
     """改写 OOXML 包：删除 delete_keys 字段并把 set_ops 字段设为新值。
 
-    其余部件逐字节保留。返回 (删除的 key 列表, 修改的 key 列表)。
+    其余部件逐字节保留。目标属性部件缺失但有待写入字段时，按规范新建
+    部件并登记到 [Content_Types].xml 与 _rels/.rels。
+    返回 (删除的 key 列表, 修改的 key 列表)。
     """
     wanted = set(delete_keys)
     core_ops = {k: v for k, v in set_ops.items() if k in CORE_FIELDS}
@@ -391,13 +444,38 @@ def clean_ooxml(src, dst, delete_keys, set_ops):
     custom_ops = {k: v for k, v in set_ops.items() if k.startswith('custom:')}
     removed, edited = [], []
     with zipfile.ZipFile(src) as zin:
+        names = {n.replace('\\', '/') for n in zin.namelist()}
+
+        # 部件缺失但有待写入字段时新建（包结构不完整则放弃，如实报告）
+        new_parts = []   # (部件名, 数据, ContentType, 关系Type, 涉及的 key)
+        if (core_ops or app_ops) and '[Content_Types].xml' in names \
+                and '_rels/.rels' in names:
+            if core_ops and 'docProps/core.xml' not in names:
+                data = _build_props_part(CORE_PART_TEMPLATE, 'core', core_ops)
+                new_parts.append(('docProps/core.xml', data, CORE_CONTENT_TYPE,
+                                  CORE_REL_TYPE, list(core_ops)))
+            if app_ops and 'docProps/app.xml' not in names:
+                data = _build_props_part(APP_PART_TEMPLATE, 'app', app_ops)
+                new_parts.append(('docProps/app.xml', data, APP_CONTENT_TYPE,
+                                  APP_REL_TYPE, list(app_ops)))
+        ct_bytes = zin.read('[Content_Types].xml') if '[Content_Types].xml' in names else None
+        rels_bytes = zin.read('_rels/.rels') if '_rels/.rels' in names else None
+        for part_name, _data, ctype, rtype, keys in new_parts:
+            ct_bytes, rels_bytes = _register_part(ct_bytes, rels_bytes,
+                                                  part_name, ctype, rtype)
+            edited.extend(keys)
+
         with zipfile.ZipFile(dst, 'w') as zout:
             zout.comment = zin.comment
             for info in zin.infolist():
                 data = zin.read(info.filename)
                 fname = info.filename.replace('\\', '/')
                 rm, ed = [], []
-                if fname == 'docProps/core.xml':
+                if fname == '[Content_Types].xml' and ct_bytes is not None:
+                    data = ct_bytes
+                elif fname == '_rels/.rels' and rels_bytes is not None:
+                    data = rels_bytes
+                elif fname == 'docProps/core.xml':
                     data, rm, ed = _rewrite_part(data, wanted, core_ops, 'core')
                 elif fname == 'docProps/app.xml':
                     data, rm, ed = _rewrite_part(data, wanted, app_ops, 'app')
@@ -409,6 +487,10 @@ def clean_ooxml(src, dst, delete_keys, set_ops):
                 zi.compress_type = info.compress_type
                 zi.external_attr = info.external_attr
                 zi.comment = info.comment
+                zout.writestr(zi, data)
+            for part_name, data, _ct, _rt, _keys in new_parts:
+                zi = zipfile.ZipInfo(part_name, date_time=(1980, 1, 1, 0, 0, 0))
+                zi.compress_type = zipfile.ZIP_DEFLATED
                 zout.writestr(zi, data)
     return removed, edited
 
@@ -440,6 +522,25 @@ def read_pdf_props(path):
     except Exception:
         pass
 
+    # 页面级 /Metadata（挂在页面对象上，目录级读不到）
+    try:
+        page_meta_count = 0
+        for pg in reader.pages:
+            ref = pg.get('/Metadata')
+            if ref is None:
+                continue
+            page_meta_count += 1
+            try:
+                raw = ref.get_object().get_data()
+            except Exception:
+                raw = b''
+            if looks_like_ai(raw.decode('utf-8', 'replace')):
+                suspects.add(PAGEMETA_KEY)
+        if page_meta_count:
+            props[PAGEMETA_KEY] = '存在（%d 页含内嵌元数据）' % page_meta_count
+    except Exception:
+        pass
+
     for key, val in props.items():
         if looks_like_ai(val):
             suspects.add(key)
@@ -452,9 +553,147 @@ def read_pdf_props(path):
     return props, suspects
 
 
+# XMP 与 Info 字典的对应关系：(命名空间, 属性名, 容器类型 None/'Alt'/'Seq')
+RDF_NS = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#'
+XMP_META_NS = 'adobe:ns:meta/'
+XMP_NS = 'http://ns.adobe.com/xap/1.0/'
+PDF_NS = 'http://ns.adobe.com/pdf/1.3/'
+INFO_XMP_MAP = {
+    'Title':        (DC_NS, 'title', 'Alt'),
+    'Author':       (DC_NS, 'creator', 'Seq'),
+    'Subject':      (DC_NS, 'description', 'Alt'),
+    'Keywords':     (PDF_NS, 'Keywords', None),
+    'Creator':      (XMP_NS, 'CreatorTool', None),
+    'Producer':     (PDF_NS, 'Producer', None),
+    'CreationDate': (XMP_NS, 'CreateDate', None),
+    'ModDate':      (XMP_NS, 'ModifyDate', None),
+    'Trapped':      (PDF_NS, 'Trapped', None),
+}
+
+_XPACKET_BEGIN = '<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>'
+_XPACKET_END = '<?xpacket end="w"?>'
+
+
+def _xmp_value(info_key, value):
+    """Info 格式的值转成 XMP 格式（日期 D:... -> ISO 8601）。"""
+    if info_key in ('CreationDate', 'ModDate'):
+        dt = _parse_dt(value)
+        if dt is not None:
+            return dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+    return str(value)
+
+
+def _build_xmp_prop(ns, local, kind, value):
+    """构造 XMP 属性元素；Alt/Seq 容器内包一层 rdf:li。"""
+    elem = ET.Element('{%s}%s' % (ns, local))
+    if kind in ('Alt', 'Seq'):
+        cont = ET.SubElement(elem, '{%s}%s' % (RDF_NS, kind))
+        li = ET.SubElement(cont, '{%s}li' % RDF_NS)
+        li.text = value
+    else:
+        elem.text = value
+    return elem
+
+
+def _serialize_xmp(root, original_bytes):
+    """序列化 XMP：保留原文件命名空间前缀，统一 UTF-8，补全 xpacket 包裹
+    （ElementTree 解析时会丢弃 PI，需重新补上）。"""
+    for pfx, uri in (('x', XMP_META_NS), ('rdf', RDF_NS), ('dc', DC_NS),
+                     ('xmp', XMP_NS), ('pdf', PDF_NS)):
+        ET.register_namespace(pfx, uri)
+    for m in _XMLNS_RE.finditer(original_bytes):
+        ET.register_namespace(m.group(1).decode('ascii'), m.group(2).decode('ascii'))
+    for m in _DEFAULT_NS_RE.finditer(original_bytes):
+        ET.register_namespace('', m.group(1).decode('ascii'))
+    body = ET.tostring(root, encoding='unicode')
+    decl = '<?xml version="1.0" encoding="UTF-8"?>' \
+        if original_bytes.startswith(b'<?xml') else ''
+    return (decl + _XPACKET_BEGIN + body + _XPACKET_END).encode('utf-8')
+
+
+def _rewrite_xmp(xml_bytes, del_props, set_props):
+    """把 Info 字段的删除/修改同步进 XMP 包。
+
+    del_props: Info 字段名列表（如 ['Producer']）；set_props: {Info 字段名: 值}。
+    同时支持元素形式（<pdf:Producer>x</pdf:Producer>）与属性形式
+    （<rdf:Description pdf:Producer="x">）。返回 (新字节, 删除的字段,
+    写入的字段)；XMP 无法解析时返回 None。
+    """
+    try:
+        root = ET.fromstring(xml_bytes)
+    except ET.ParseError:
+        return None
+    removed_keys, edited_keys = [], []
+
+    for name in del_props:
+        mapping = INFO_XMP_MAP.get(name)
+        if mapping is None:
+            continue
+        ns, local, _kind = mapping
+        tag = attr = '{%s}%s' % (ns, local)
+        hit = False
+        for parent in list(root.iter()):
+            for child in list(parent):
+                if child.tag == tag:
+                    parent.remove(child)
+                    hit = True
+        for elem in root.iter():
+            if attr in elem.attrib:
+                del elem.attrib[attr]
+                hit = True
+        if hit:
+            removed_keys.append(name)
+
+    for name, raw_value in set_props.items():
+        mapping = INFO_XMP_MAP.get(name)
+        if mapping is None:
+            continue
+        ns, local, kind = mapping
+        tag = '{%s}%s' % (ns, local)
+        value = _xmp_value(name, raw_value)
+        elem = next((e for e in root.iter() if e.tag == tag), None)
+        if elem is not None:
+            subs = list(elem)
+            for s in subs:
+                elem.remove(s)
+            if subs and _local(subs[0].tag) in ('Alt', 'Seq', 'Bag'):
+                cont = ET.SubElement(elem, subs[0].tag)
+                li = ET.SubElement(cont, '{%s}li' % RDF_NS)
+                li.text = value
+            else:
+                elem.text = value
+        else:
+            desc = next((e for e in root.iter() if _local(e.tag) == 'Description'), None)
+            if desc is None:
+                rdf = next((e for e in root.iter() if _local(e.tag) == 'RDF'), None)
+                if rdf is None:
+                    continue
+                desc = ET.SubElement(rdf, '{%s}Description' % RDF_NS)
+                desc.set('{%s}about' % RDF_NS, '')
+            desc.append(_build_xmp_prop(ns, local, kind, value))
+        edited_keys.append(name)
+
+    if not removed_keys and not edited_keys:
+        return None
+    return _serialize_xmp(root, xml_bytes), removed_keys, edited_keys
+
+
+def _replace_xmp_stream(writer, data):
+    """用未压缩的新流替换目录级 /Metadata（规避原流的过滤器/长度问题）。"""
+    from pypdf.generic import NameObject, NumberObject, StreamObject
+    stream = StreamObject()
+    stream[NameObject('/Type')] = NameObject('/Metadata')
+    stream[NameObject('/Subtype')] = NameObject('/XML')
+    stream.set_data(data)
+    stream[NameObject('/Length')] = NumberObject(len(data))
+    writer.root_object[NameObject('/Metadata')] = writer._add_object(stream)
+
+
 def clean_pdf(src, dst, delete_keys, set_ops):
     """删除 delete_keys 并把 set_ops（key -> value）写入 PDF Info 字典。
 
+    Info 的修改/删除会同步改写 XMP 包（存在时），避免旧值残留；
+    页面级 /Metadata 通过勾选 pdf:pagemeta 整体删除。
     返回 (删除的 key 列表, 修改的 key 列表)。
     """
     try:
@@ -469,23 +708,48 @@ def clean_pdf(src, dst, delete_keys, set_ops):
     info = getattr(writer, '_info', None)
     if info is None:
         info = writer._info_obj
+    info_dels = []
     for k in list(info.keys()):
         key = str(k).lstrip('/')
         if ('pdf:' + key) in wanted:
             del info[NameObject(str(k))]
             removed.append('pdf:' + key)
+            info_dels.append(key)
     if XMP_KEY in wanted and '/Metadata' in writer.root_object:
         del writer.root_object[NameObject('/Metadata')]
         removed.append(XMP_KEY)
+    if PAGEMETA_KEY in wanted:
+        page_hits = 0
+        for page in writer.pages:
+            if '/Metadata' in page:
+                del page[NameObject('/Metadata')]
+                page_hits += 1
+        if page_hits:
+            removed.append(PAGEMETA_KEY)
 
     updates = {}
     for key, value in set_ops.items():
-        if not key.startswith('pdf:'):
+        if not key.startswith('pdf:') or key in (XMP_KEY, PAGEMETA_KEY):
             continue
         updates[NameObject('/' + key[4:])] = value
         edited.append(key)
     if updates:
         writer.add_metadata(updates)
+
+    # Info 的删除/修改同步进 XMP，防止旧值残留在内嵌 XML 里
+    if '/Metadata' in writer.root_object:
+        info_sets = {k[4:]: v for k, v in set_ops.items()
+                     if k.startswith('pdf:') and k not in (XMP_KEY, PAGEMETA_KEY)}
+        if info_dels or info_sets:
+            xmp_stream = writer.root_object[NameObject('/Metadata')].get_object()
+            try:
+                raw = xmp_stream.get_data()
+            except Exception:
+                raw = b''
+            result = _rewrite_xmp(raw, info_dels, info_sets)
+            if result is not None and (result[1] or result[2]):
+                _replace_xmp_stream(writer, result[0])
+
     with open(dst, 'wb') as f:
         writer.write(f)
     return removed, edited
@@ -500,6 +764,8 @@ def field_display_name(key):
         return CORE_FIELDS[key]
     if key in APP_FIELDS:
         return APP_FIELDS[key]
+    if key == PAGEMETA_KEY:
+        return PAGEMETA_NAME
     if key == XMP_KEY:
         return XMP_NAME
     if key.startswith('pdf:'):
@@ -519,6 +785,8 @@ def field_sort_key(key):
         return 500 + (PDF_ORDER.index(local) if local in PDF_ORDER else 50)
     if key.startswith('custom:'):
         return 700
+    if key == PAGEMETA_KEY:
+        return 890
     if key == XMP_KEY:
         return 900
     return 950
@@ -549,8 +817,8 @@ def collect_ops(entry, checked_keys, edits):
     for key, e in edits.items():
         if not (e['all'] or e['path'] == entry['path']):
             continue
-        if key == XMP_KEY:
-            skipped.append((key, 'XMP 不支持直接编辑'))
+        if key in (XMP_KEY, PAGEMETA_KEY):
+            skipped.append((key, 'XMP / 页面级元数据不支持直接编辑'))
             continue
         if entry['kind'] == 'pdf':
             if not key.startswith('pdf:'):
@@ -1066,8 +1334,8 @@ class CleanerApp(_Base):
             messagebox.showinfo('提示', '请先在左侧选中文件，再在右侧选中要编辑的属性行。')
             return
         key = sel[0]
-        if key == XMP_KEY:
-            messagebox.showinfo('提示', 'XMP 元数据包不支持直接编辑，可勾选清除整个包。')
+        if key in (XMP_KEY, PAGEMETA_KEY):
+            messagebox.showinfo('提示', 'XMP / 页面级元数据不支持逐项编辑，可勾选整体清除。')
             return
         if key.startswith('custom:') and key not in entry['props']:
             messagebox.showinfo('提示', '该文件没有这个自定义属性，不支持新建自定义属性。')

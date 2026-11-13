@@ -122,6 +122,56 @@ def make_pdf(path):
         w.write(f)
 
 
+XMP_XML = (
+    '<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>'
+    '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+    '<rdf:Description rdf:about="" xmlns:pdf="http://ns.adobe.com/pdf/1.3/">'
+    '<pdf:Producer>Skia/PDF m123</pdf:Producer>'
+    '</rdf:Description>'
+    '<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"'
+    ' xmlns:xmp="http://ns.adobe.com/xap/1.0/">'
+    '<dc:creator><rdf:Seq><rdf:li>ChatGPT</rdf:li></rdf:Seq></dc:creator>'
+    '<dc:title><rdf:Alt><rdf:li>保留的标题</rdf:li></rdf:Alt></dc:title>'
+    '<xmp:CreateDate>2026-10-20T10:00:00Z</xmp:CreateDate>'
+    '</rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="w"?>'
+).encode('utf-8')
+
+PAGEMETA_XML = (
+    '<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?>'
+    '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+    '<rdf:Description rdf:about="" xmlns:pdf="http://ns.adobe.com/pdf/1.3/">'
+    '<pdf:Producer>Skia/PDF m999</pdf:Producer>'
+    '</rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="w"?>'
+).encode('utf-8')
+
+
+def _attach_metadata_stream(writer, xml_bytes, root=False):
+    """把内嵌 XML 元数据流挂到目录级（root=True）或第 1 页上。"""
+    from pypdf.generic import NameObject, StreamObject
+    s = StreamObject()
+    s[NameObject('/Type')] = NameObject('/Metadata')
+    s[NameObject('/Subtype')] = NameObject('/XML')
+    s.set_data(xml_bytes)
+    ref = writer._add_object(s)
+    if root:
+        writer._root_object[NameObject('/Metadata')] = ref
+    else:
+        writer.pages[0][NameObject('/Metadata')] = ref
+
+
+def make_pdf_with_xmp(path):
+    """带目录级 XMP + 页面级元数据的 PDF（模拟 Chrome/Word 导出的真实情况）。"""
+    from pypdf import PdfWriter
+    w = PdfWriter()
+    w.add_blank_page(300, 400)
+    w.add_metadata({'/Title': '保留的标题', '/Author': 'ChatGPT',
+                    '/Producer': 'Skia/PDF m123'})
+    _attach_metadata_stream(w, XMP_XML, root=True)
+    _attach_metadata_stream(w, PAGEMETA_XML, root=False)
+    with open(path, 'wb') as f:
+        w.write(f)
+
+
 def make_samples():
     if os.path.isdir(OUT):
         shutil.rmtree(OUT)
@@ -255,6 +305,8 @@ def test_normalize():
     check('pdf 日期转换', err is None and v == 'D:20260102030405Z', (err, v))
     err, v = dmc.normalize_edit_value('pdf', 'pdf:ModDate', 'D:20260102030405')
     check('pdf D:格式输入', err is None and v == 'D:20260102030405Z', (err, v))
+    err, v = dmc.normalize_edit_value('pdf', 'pdf:CreationDate', 'D:20261020100000Z')
+    check('pdf D:格式带Z输入', err is None and v == 'D:20261020100000Z', (err, v))
     err, v = dmc.normalize_edit_value('ooxml', 'TotalTime', '90')
     check('整数通过', err is None and v == '90', (err, v))
     err, v = dmc.normalize_edit_value('ooxml', 'TotalTime', 'abc')
@@ -364,6 +416,144 @@ def test_edit_pdf():
     check('pdf 页数不变', len(PdfReader(dest).pages) == 1)
 
 
+def test_pdf_xmp_sync():
+    src = os.path.join(OUT, 'xmp.pdf')
+    make_pdf_with_xmp(src)
+    entry = dmc.scan_file(src)
+    check('pdf 扫描到 XMP', 'pdf:xmp' in entry['props'], entry['props'])
+    check('pdf 扫描到页面级元数据', 'pdf:pagemeta' in entry['props'])
+    check('pdf XMP 疑似AI', 'pdf:xmp' in entry['suspects'])
+    check('pdf 页面级疑似AI', 'pdf:pagemeta' in entry['suspects'])
+
+    # 编辑 Info Producer + 勾选清除 Info Author -> XMP 必须同步，不能残留旧值
+    edits = {'pdf:Producer': {'value': 'Word 2024', 'all': False, 'path': src}}
+    dest, removed, edited = dmc.clean_file(entry, ['pdf:Author'], edits, 'copy')
+    check('pdf Info 编辑项数', [k for k, _ in edited] == ['pdf:Producer'], edited)
+    check('pdf Info 删除项数', removed == ['pdf:Author'], removed)
+    after = dmc.scan_file(dest)['props']
+    check('Info Producer 已修改', after.get('pdf:Producer') == 'Word 2024')
+    check('Info Author 已删除', 'pdf:Author' not in after)
+    from pypdf import PdfReader
+    r = PdfReader(dest)
+    raw = r.xmp_metadata.stream.get_data().decode('utf-8', 'replace')
+    check('XMP Producer 已同步', 'Skia' not in raw and 'Word 2024' in raw, raw[:300])
+    check('XMP Author 已删除', 'ChatGPT' not in raw)
+    check('XMP 标题保留', '保留的标题' in raw)
+    check('XMP 时间保留', '2026-10-20T10:00:00Z' in raw)
+    check('pdf 页数不变', len(r.pages) == 1)
+
+    # 页面级元数据整体清除，根 XMP 不受影响
+    dest2, removed2, _ = dmc.clean_file(dmc.scan_file(src), ['pdf:pagemeta'], {}, 'copy')
+    r2 = PdfReader(dest2)
+    check('页面级元数据已删除', '/Metadata' not in r2.pages[0])
+    check('页面级删除报告', removed2 == ['pdf:pagemeta'], removed2)
+    raw2 = r2.xmp_metadata.stream.get_data().decode('utf-8', 'replace')
+    check('根 XMP 不受影响', 'Skia' in raw2)
+
+
+def test_xmp_rewrite_units():
+    xml = (
+        '<?xpacket begin=""?><x:xmpmeta xmlns:x="adobe:ns:meta/">'
+        '<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+        '<rdf:Description rdf:about="" xmlns:pdf="http://ns.adobe.com/pdf/1.3/"'
+        ' pdf:Producer="Skia/PDF m123">'
+        '</rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="w"?>'
+    ).encode('utf-8')
+    out = dmc._rewrite_xmp(xml, ['Producer'], {'Producer': 'Word'})
+    check('属性形式 XMP 可改写', out is not None)
+    new_bytes, xd, xe = out
+    check('属性形式 Producer 已删除', xd == ['Producer'], xd)
+    check('属性形式 Producer 已写入', b'Skia' not in new_bytes and b'Word' in new_bytes)
+    check('xpacket 包裹保留', b'<?xpacket begin' in new_bytes and b'<?xpacket end' in new_bytes)
+    out2 = dmc._rewrite_xmp(new_bytes, [], {'Producer': 'WPS'})
+    check('改写结果可再次解析', out2 is not None and b'WPS' in out2[0])
+    out3 = dmc._rewrite_xmp(new_bytes, [], {'ModDate': 'D:20260102030405Z'})
+    check('XMP 日期转 ISO', out3 is not None and b'2026-01-02T03:04:05Z' in out3[0])
+    check('非法 XMP 返回 None', dmc._rewrite_xmp(b'<broken', [], {}) is None)
+
+
+def test_edit_missing_parts():
+    # 只有 core.xml，缺 app.xml / custom.xml
+    p = os.path.join(OUT, 'noapp.docx')
+    with zipfile.ZipFile(p, 'w', zipfile.ZIP_DEFLATED) as z:
+        ct = CONTENT_TYPES_DOCX.replace(
+            '<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>', '')
+        ct = ct.replace(
+            '<Override PartName="/docProps/custom.xml" ContentType="application/vnd.openxmlformats-officedocument.custom-properties+xml"/>', '')
+        z.writestr('[Content_Types].xml', ct)
+        rels = RELS.replace(
+            '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>', '')
+        rels = rels.replace(
+            '<Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officedocument/2006/relationships/custom-properties" Target="docProps/custom.xml"/>', '')
+        z.writestr('_rels/.rels', rels)
+        z.writestr('word/document.xml', DOCUMENT_XML)
+        z.writestr('docProps/core.xml', CORE_XML)
+
+    entry = dmc.scan_file(p)
+    edits = {'TotalTime': {'value': '45', 'all': False, 'path': p},
+             'category': {'value': '年度报告', 'all': False, 'path': p}}
+    dest, removed, edited = dmc.clean_file(entry, [], edits, 'copy')
+    check('缺 part 编辑项数', {k for k, _ in edited} == {'TotalTime', 'category'}, edited)
+    after = dmc.scan_file(dest)['props']
+    check('TotalTime 写入新建 app.xml', after.get('TotalTime') == '45', after.get('TotalTime'))
+    check('category 写入 core.xml', after.get('category') == '年度报告')
+    check('原有 creator 保留', after.get('creator') == 'ChatGPT (OpenAI)')
+    import xml.etree.ElementTree as ET
+    with zipfile.ZipFile(dest) as z, zipfile.ZipFile(p) as zs:
+        ct = z.read('[Content_Types].xml').decode('utf-8')
+        rels = z.read('_rels/.rels').decode('utf-8')
+        app = z.read('docProps/app.xml')
+        ET.fromstring(ct)
+        ET.fromstring(rels)
+        approot = ET.fromstring(app)
+        check('新建 app.xml 已登记 ContentType',
+              '/docProps/app.xml' in ct and 'extended-properties' in ct)
+        check('新建 app.xml 已登记关系', 'docProps/app.xml' in rels)
+        check('新建 app.xml 元素正确',
+              next(c for c in approot if dmc._local(c.tag) == 'TotalTime').text == '45')
+        check('缺 part 编辑正文逐字节保留',
+              zs.read('word/document.xml') == z.read('word/document.xml'))
+
+    # 勾选删除缺失部件里的字段 -> 如实报告"未改动"，不误报
+    dest3, removed3, _ = dmc.clean_file(dmc.scan_file(p), ['Application'], {}, 'copy')
+    check('删除缺失 part 字段不误报', removed3 == [], removed3)
+
+    # 完全没有 docProps 的文件
+    p2 = os.path.join(OUT, 'nodocprops.docx')
+    CT_MIN = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+        '</Types>'
+    )
+    RELS_MIN = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+        '</Relationships>'
+    )
+    with zipfile.ZipFile(p2, 'w', zipfile.ZIP_DEFLATED) as z:
+        z.writestr('[Content_Types].xml', CT_MIN)
+        z.writestr('_rels/.rels', RELS_MIN)
+        z.writestr('word/document.xml', DOCUMENT_XML)
+    entry2 = dmc.scan_file(p2)
+    check('无 docProps 读取为空', entry2['props'] == {}, entry2['props'])
+    edits2 = {'creator': {'value': '李四', 'all': False, 'path': p2}}
+    dest2, _r2, edited2 = dmc.clean_file(entry2, [], edits2, 'copy')
+    check('无 docProps 编辑生效', [k for k, _ in edited2] == ['creator'], edited2)
+    after2 = dmc.scan_file(dest2)['props']
+    check('core.xml 已新建', after2.get('creator') == '李四')
+    with zipfile.ZipFile(dest2) as z:
+        ct2 = z.read('[Content_Types].xml').decode('utf-8')
+        rels2 = z.read('_rels/.rels').decode('utf-8')
+    ET.fromstring(ct2)
+    ET.fromstring(rels2)
+    check('新建 core.xml 已登记',
+          '/docProps/core.xml' in ct2 and 'docProps/core.xml' in rels2)
+
+
 def main():
     make_samples()
     test_scan()
@@ -374,6 +564,9 @@ def main():
     test_edit_ooxml()
     test_edit_apply_all_and_skip()
     test_edit_pdf()
+    test_pdf_xmp_sync()
+    test_xmp_rewrite_units()
+    test_edit_missing_parts()
     print()
     if FAILURES:
         print('FAILED:', len(FAILURES), '项未通过 ->', FAILURES)

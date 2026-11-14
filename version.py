@@ -6,4 +6,4 @@ Release 工作流会先校验标签与本文件一致，再跑测试、构建发
 CLI 的 --version、GUI 窗口标题、exe 版本资源都从这里取值。
 """
 
-__version__ = '1.3.0'
+__version__ = '1.4.0'

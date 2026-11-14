@@ -131,7 +131,7 @@ Exit codes: **0** all succeeded; **1** at least one file failed (in use / encryp
 
 ## 🤖 Working with AI agents
 
-The tool's signature scenario is "students have an agent generate the homework" — so the smoothest usage is not dragging files into the GUI yourself, but **making cleanup a finishing rule the agent runs right after generating**. Paste the block below together with your generation request into any terminal-capable agent (Claude Code / Codex CLI / ZCode, etc.):
+If you use AI agents (Claude Code / Codex CLI / ZCode, etc.) to generate Word / Excel / PPT / PDF documents, the smoothest workflow is to make property cleanup a **fixed finishing step**: once a document is generated, the agent runs the command line itself — no manual dragging into the GUI. Paste the block below together with your generation request:
 
 ```text
 [Cleanup document properties before delivery — REQUIRED]
@@ -175,7 +175,7 @@ For `clean` / `set`, each file in the JSON carries `ok`, `changed`, `dest` (outp
 | 1 | At least one file failed (in use / encrypted / unknown field / invalid value) — see `errors` and `files[].error` | Read the details, fix, then retry |
 | 2 | The command itself is wrong (missing args, bad assignment format) | Fix the command; don't retry as-is |
 
-> 💡 For batch jobs pass a directory (expanded recursively): `clean D:\homework\`. To unify the author across a batch, use `set`: `python doc_meta_cli.py set D:\homework\ creator=ZhangSan --mode overwrite`.
+> 💡 For batch jobs pass a directory (expanded recursively): `clean D:\materials\`. To unify the author across a batch, use `set`: `python doc_meta_cli.py set D:\materials\ creator=ZhangSan --mode overwrite`.
 
 ## 📂 Supported formats
 

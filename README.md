@@ -122,7 +122,7 @@ python doc_meta_cli.py set 报告.docx creator=张三
 python doc_meta_cli.py set 报告.docx created="2026-10-20 10:00:05" --mode overwrite
 
 # JSON 输出：结果以单个 JSON 文档打印到 stdout，供脚本/Agent 程序化解析
-python doc_meta_cli.py scan 作业.docx --json
+python doc_meta_cli.py scan 报告.docx --json
 
 python doc_meta_cli.py --list-fields    # 查看全部可操作的字段
 ```
@@ -131,7 +131,7 @@ python doc_meta_cli.py --list-fields    # 查看全部可操作的字段
 
 ## 🤖 与 AI Agent 配合使用
 
-这个工具的典型场景，就是"学生让 agent 生成作业"——所以最顺滑的用法不是生成完自己再拖进界面，而是**把清理写成 agent 的收尾规则，让它生成完自己调命令行**。把下面这段直接连同你的生成需求一起粘给任何带终端的 agent（Claude Code / Codex CLI / ZCode 等）：
+如果你平时用 AI agent（Claude Code / Codex CLI / ZCode 等）生成 Word / Excel / PPT / PDF 文档，最顺滑的用法是把属性清理设为 agent 的**固定收尾步骤**：文档生成完成后由 agent 自动调用命令行清理，不需要再手动拖进界面。把下面这段连同你的生成需求一起粘给 agent 即可：
 
 ```text
 【交付前清理文档属性 —— 必须执行】
@@ -149,14 +149,14 @@ python doc_meta_cli.py --list-fields    # 查看全部可操作的字段
 **程序化接口**（给需要自己解析结果的 agent/脚本）：三个子命令都支持 `--json`，stdout 输出单个 JSON 文档，中文值以 `\uXXXX` 转义保证任何终端编码下都是合法 JSON：
 
 ```bash
-python doc_meta_cli.py scan 作业.docx --json
+python doc_meta_cli.py scan 报告.docx --json
 ```
 
 ```json
 {
   "command": "scan",
   "files": [
-    { "path": "作业.docx", "kind": "ooxml",
+    { "path": "报告.docx", "kind": "ooxml",
       "props": { "creator": "python-docx", "TotalTime": "0" },
       "suspects": ["creator", "created", "modified", "TotalTime"] }
   ],
@@ -175,7 +175,7 @@ python doc_meta_cli.py scan 作业.docx --json
 | 1 | 有文件处理失败（被占用 / 加密 / 字段不存在 / 值非法），`errors` 与 `files[].error` 有明细 | 读明细，处理后重试 |
 | 2 | 命令本身写错（参数缺失、赋值格式不对） | 修正命令，不要原样重试 |
 
-> 💡 批量场景直接传目录（递归展开）：`clean D:\作业\`。想给整批文档统一作者，用 `set`：`python doc_meta_cli.py set D:\作业\ creator=张三 --mode overwrite`。
+> 💡 批量场景直接传目录（递归展开）：`clean D:\资料\`。想给整批文档统一作者，用 `set`：`python doc_meta_cli.py set D:\资料\ creator=张三 --mode overwrite`。
 
 ## 📂 支持的格式
 

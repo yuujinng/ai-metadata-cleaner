@@ -15,11 +15,11 @@
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/平台-Windows%2010%2F11-0078D6?style=flat-square&logo=windows11&logoColor=white)](https://github.com/yuujinng/ai-metadata-cleaner#-quick-start)
 
-<img src="docs/screenshot.png" alt="App preview: suspected AI traces highlighted in red and pre-checked" width="720"/>
+<img src="docs/screenshot.png?v=1.2" alt="App preview: suspected AI traces highlighted in red and pre-checked" width="720"/>
 
 *Drop files in → suspected AI traces get highlighted and pre-checked → clean with one click*
 
-<img src="docs/demo.gif" alt="Demo GIF: drop files → traces highlighted and checked → one-click cleanup with per-file log" width="720"/>
+<img src="docs/demo.gif?v=1.2" alt="Demo GIF: drop files → traces highlighted and checked → one-click cleanup with per-file log" width="720"/>
 
 </div>
 

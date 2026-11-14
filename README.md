@@ -15,11 +15,11 @@
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/平台-Windows%2010%2F11-0078D6?style=flat-square&logo=windows11&logoColor=white)](https://github.com/yuujinng/ai-metadata-cleaner#快速开始)
 
-<img src="docs/screenshot.png" alt="界面预览：AI 痕迹自动标红勾选" width="720"/>
+<img src="docs/screenshot.png?v=1.2" alt="界面预览：AI 痕迹自动标红勾选" width="720"/>
 
 *拖入文件 → 疑似 AI 痕迹自动标红并勾选 → 一键清理*
 
-<img src="docs/demo.gif" alt="演示动图：拖入文件 → AI 痕迹标红勾选 → 一键清理，日志逐文件报告" width="720"/>
+<img src="docs/demo.gif?v=1.2" alt="演示动图：拖入文件 → AI 痕迹标红勾选 → 一键清理，日志逐文件报告" width="720"/>
 
 </div>
 

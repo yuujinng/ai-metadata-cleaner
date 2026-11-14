@@ -39,7 +39,7 @@ os.makedirs(work)
 doc = shutil.copy(sample, work)
 
 r = run('--version')
-check('版本号', r.returncode == 0 and 'doc-meta-cleaner' in r.stdout,
+check('版本号', r.returncode == 0 and 'ai-metadata-cleaner' in r.stdout,
       (r.returncode, r.stdout, r.stderr))
 
 r = run('scan', doc)

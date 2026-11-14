@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""doc-meta-cleaner 命令行入口：scan / clean / set。
+"""ai-metadata-cleaner 命令行入口：scan / clean / set。
 
 与 doc_meta_cleaner.py（核心逻辑 + 图形界面）分离：
 本文件只做参数解析与结果展示，所有能力都复用主模块的函数，
@@ -285,11 +285,11 @@ def print_fields():
 def build_parser():
     parser = argparse.ArgumentParser(
         prog='doc_meta_cli',
-        description='文档属性清理工具（命令行版）：扫描、清理、修改 Word/Excel/PPT/PDF 的属性（元数据）',
+        description='文档AI属性清理工具（命令行版）：扫描、清理、修改 Word/Excel/PPT/PDF 的属性（元数据）',
         epilog='示例：python doc_meta_cli.py clean D:\\资料\\   '
                '# 递归清理目录内文档的疑似 AI 痕迹，另存副本')
     parser.add_argument('--version', action='version',
-                        version='doc-meta-cleaner ' + __version__ + '（MIT License）')
+                        version='ai-metadata-cleaner ' + __version__ + '（MIT License）')
     parser.add_argument('--list-fields', action='store_true',
                         help='列出全部可操作的字段后退出')
     sub = parser.add_subparsers(dest='command', metavar='{scan,clean,set}')

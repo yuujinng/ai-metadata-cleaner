@@ -2,18 +2,18 @@
 
 [简体中文](README.md) | English
 
-# 🧹 DocMetaCleaner
+# 🧹 AI Metadata Cleaner
 
 **One click to clear or edit the properties (metadata) of Word / Excel / PPT / PDF files — wipe AI-generated traces**
 
 🔒 **100% local processing** — your files never leave your computer
 
-[![Release](https://img.shields.io/github/v/release/yuujinng/doc-meta-cleaner?style=flat-square)](../../releases)
-[![下载量](https://img.shields.io/github/downloads/yuujinng/doc-meta-cleaner/total?style=flat-square&label=%E4%B8%8B%E8%BD%BD)](../../releases)
-[![CI](https://github.com/yuujinng/doc-meta-cleaner/actions/workflows/ci.yml/badge.svg)](https://github.com/yuujinng/doc-meta-cleaner/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/github/license/yuujinng/doc-meta-cleaner?style=flat-square)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/yuujinng/ai-metadata-cleaner?style=flat-square)](../../releases)
+[![下载量](https://img.shields.io/github/downloads/yuujinng/ai-metadata-cleaner/total?style=flat-square&label=%E4%B8%8B%E8%BD%BD)](../../releases)
+[![CI](https://github.com/yuujinng/ai-metadata-cleaner/actions/workflows/ci.yml/badge.svg)](https://github.com/yuujinng/ai-metadata-cleaner/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/github/license/yuujinng/ai-metadata-cleaner?style=flat-square)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
-[![Platform](https://img.shields.io/badge/平台-Windows%2010%2F11-0078D6?style=flat-square&logo=windows11&logoColor=white)](https://github.com/yuujinng/doc-meta-cleaner#-quick-start)
+[![Platform](https://img.shields.io/badge/平台-Windows%2010%2F11-0078D6?style=flat-square&logo=windows11&logoColor=white)](https://github.com/yuujinng/ai-metadata-cleaner#-quick-start)
 
 <img src="docs/screenshot.png" alt="App preview: suspected AI traces highlighted in red and pre-checked" width="720"/>
 
@@ -55,8 +55,8 @@
 
 **Option 1: download the exe (recommended, no Python needed)**
 
-1. Open the [Releases](../../releases) page and download **DocMetaCleaner.exe** (~15 MB) from the latest release;
-2. Double-click to run. **No Python installation required** — everything is bundled, and it works offline. The product name in the file properties remains 「文档属性清理工具」.
+1. Open the [Releases](../../releases) page and download **AIMetadataCleaner.exe** (~15 MB) from the latest release;
+2. Double-click to run. **No Python installation required** — everything is bundled, and it works offline. The exe file name is the ASCII `AIMetadataCleaner.exe` (for Release-asset compatibility); the file description in its properties stays Chinese.
 
 > Your browser or Windows SmartScreen may warn about an "unknown publisher": the exe is not code-signed. Click "More info → Run anyway". Some antivirus tools may flag it (a common false positive for PyInstaller binaries) — add it to your trust list. The SHA256 checksum of the exe is listed on the Release page if you want to verify integrity.
 
@@ -64,15 +64,15 @@
 
 1. Install [Python 3.11+](https://www.python.org/downloads/) (check *"Add Python to PATH"*)
 2. Download this repository (*Code → Download ZIP*, or `git clone`)
-3. Double-click **文档属性清理工具.bat** (the double-click launcher)
+3. Double-click **文档AI属性清理工具.bat** (the double-click launcher)
 
 On first launch it installs `pypdf` and `tkinterdnd2` automatically (once only). When the status shows 「PDF 支持：已就绪」 (PDF support: ready), everything is fine. A black console window stays next to the GUI while it runs and exits when you close the window.
 
 **Option 3: command line**
 
 ```bash
-git clone https://github.com/yuujinng/doc-meta-cleaner.git
-cd doc-meta-cleaner
+git clone https://github.com/yuujinng/ai-metadata-cleaner.git
+cd ai-metadata-cleaner
 pip install -r requirements.txt
 python doc_meta_cleaner.py
 ```
@@ -152,12 +152,12 @@ The legacy binary `.doc/.xls/.ppt` formats are not supported yet.
 ## 🗂️ Project layout
 
 ```
-doc-meta-cleaner/
+ai-metadata-cleaner/
 ├── doc_meta_cleaner.py       Core logic + GUI
 ├── doc_meta_cli.py           CLI entry (scan / clean / set)
 ├── doc_meta_cleaner.spec     PyInstaller spec (builds the Windows exe)
 ├── README.en.md              English documentation
-├── 文档属性清理工具.bat        Double-click launcher for running from source
+├── 文档AI属性清理工具.bat        Double-click launcher for running from source
 ├── 示例文件/                  4 demo documents with AI traces
 ├── docs/
 │   ├── screenshot.png        README screenshot
@@ -188,7 +188,7 @@ pyinstaller --noconfirm doc_meta_cleaner.spec   # Build a single-file exe locall
 
 Releases: push a `vX.Y.Z` tag and the Release workflow runs the full test suite, builds the Windows single-file exe, and publishes it with the source zip as a GitHub Release.
 
-> Note: the double-click launcher `文档属性清理工具.bat` must be saved as ASCII + CRLF — do not edit it and re-save as UTF-8 in an editor. If it breaks, regenerate it with `python tests/_make_bat.py`.
+> Note: the double-click launcher `文档AI属性清理工具.bat` must be saved as ASCII + CRLF — do not edit it and re-save as UTF-8 in an editor. If it breaks, regenerate it with `python tests/_make_bat.py`.
 
 ## 📄 License
 

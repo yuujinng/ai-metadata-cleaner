@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-文档属性清理工具（Document Metadata Cleaner）
+文档AI属性清理工具（AI Metadata Cleaner）
 ================================================
 删除 Word / Excel / PPT / PDF 文档属性（元数据）中泄露生成来源的信息，
 重点针对 AI 生成留下的痕迹（作者名为 ChatGPT/Claude、生成程序为脚本库等）。
 
-用法：双击「文档属性清理工具.bat」启动，或 `python doc_meta_cleaner.py`。
+用法：双击「文档AI属性清理工具.bat」启动，或 `python doc_meta_cleaner.py`。
 
 流程：添加文件 -> 预览属性并勾选要清除的字段（疑似 AI 痕迹自动勾选）
       -> 选择「另存副本 / 覆盖原文件」-> 开始清理。
@@ -986,7 +986,7 @@ _Base = TkinterDnD.Tk if TkinterDnD else tk.Tk
 class CleanerApp(_Base):
     def __init__(self):
         super().__init__()
-        self.title('文档属性清理工具 — 去除 AI 生成痕迹')
+        self.title('文档AI属性清理工具')
         self.geometry('1080x680')
         self.minsize(880, 560)
 

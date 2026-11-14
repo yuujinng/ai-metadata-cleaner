@@ -2,18 +2,18 @@
 
 [English](README.en.md) | 简体中文
 
-# 🧹 文档属性清理工具
+# 🧹 文档AI属性清理工具
 
 **一键清除或修改 Word / Excel / PPT / PDF 的属性（元数据），抹掉 AI 生成痕迹**
 
 🔒 **全程本地处理** — 文件不上传服务器，所有操作都在你自己的电脑上完成
 
-[![Release](https://img.shields.io/github/v/release/yuujinng/doc-meta-cleaner?style=flat-square)](../../releases)
-[![下载量](https://img.shields.io/github/downloads/yuujinng/doc-meta-cleaner/total?style=flat-square&label=%E4%B8%8B%E8%BD%BD)](../../releases)
-[![CI](https://github.com/yuujinng/doc-meta-cleaner/actions/workflows/ci.yml/badge.svg)](https://github.com/yuujinng/doc-meta-cleaner/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/github/license/yuujinng/doc-meta-cleaner?style=flat-square)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/yuujinng/ai-metadata-cleaner?style=flat-square)](../../releases)
+[![下载量](https://img.shields.io/github/downloads/yuujinng/ai-metadata-cleaner/total?style=flat-square&label=%E4%B8%8B%E8%BD%BD)](../../releases)
+[![CI](https://github.com/yuujinng/ai-metadata-cleaner/actions/workflows/ci.yml/badge.svg)](https://github.com/yuujinng/ai-metadata-cleaner/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/github/license/yuujinng/ai-metadata-cleaner?style=flat-square)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
-[![Platform](https://img.shields.io/badge/平台-Windows%2010%2F11-0078D6?style=flat-square&logo=windows11&logoColor=white)](https://github.com/yuujinng/doc-meta-cleaner#快速开始)
+[![Platform](https://img.shields.io/badge/平台-Windows%2010%2F11-0078D6?style=flat-square&logo=windows11&logoColor=white)](https://github.com/yuujinng/ai-metadata-cleaner#快速开始)
 
 <img src="docs/screenshot.png" alt="界面预览：AI 痕迹自动标红勾选" width="720"/>
 
@@ -55,8 +55,8 @@
 
 **方式一：下载 exe（推荐，无需安装 Python）**
 
-1. 打开 [Releases](../../releases) 页，下载最新版的 **DocMetaCleaner.exe**（约 15 MB）；
-2. 双击运行即可。**无需安装 Python**，所有组件已内置，离线也能用；文件属性里的产品名仍是「文档属性清理工具」。
+1. 打开 [Releases](../../releases) 页，下载最新版的 **AIMetadataCleaner.exe**（约 15 MB）；
+2. 双击运行即可。**无需安装 Python**，所有组件已内置，离线也能用；exe 文件名用英文 `AIMetadataCleaner.exe`（Release 资产兼容性考虑），文件属性里的「文件说明」仍是中文。
 
 > 浏览器或 Windows SmartScreen 可能提示「未知发布者 / 已保护你的电脑」：exe 尚未做数字签名，点「更多信息 → 仍要运行」即可。个别杀毒软件可能误报（PyInstaller 打包的常见现象），加入信任列表即可。如需核对完整性，Release 页附有 exe 的 SHA256 校验值。
 
@@ -64,15 +64,15 @@
 
 1. 安装 [Python 3.11+](https://www.python.org/downloads/)（勾选 *"Add Python to PATH"*）
 2. 下载本仓库（*Code → Download ZIP*，或 `git clone`）
-3. 双击 **文档属性清理工具.bat**
+3. 双击 **文档AI属性清理工具.bat**
 
 首次启动会自动联网安装 `pypdf`、`tkinterdnd2`（仅一次），界面出现「PDF 支持：已就绪」即一切正常。启动时会有一个黑色命令行窗口随界面一起存在，关闭界面后自动退出。
 
 **方式三：命令行**
 
 ```bash
-git clone https://github.com/yuujinng/doc-meta-cleaner.git
-cd doc-meta-cleaner
+git clone https://github.com/yuujinng/ai-metadata-cleaner.git
+cd ai-metadata-cleaner
 pip install -r requirements.txt
 python doc_meta_cleaner.py
 ```
@@ -152,12 +152,12 @@ python doc_meta_cli.py --list-fields    # 查看全部可操作的字段
 ## 🗂️ 项目结构
 
 ```
-doc-meta-cleaner/
+ai-metadata-cleaner/
 ├── doc_meta_cleaner.py       核心逻辑 + 图形界面
 ├── doc_meta_cli.py           命令行入口（scan / clean / set）
 ├── doc_meta_cleaner.spec     PyInstaller 打包配置（构建 Windows exe）
 ├── README.en.md              英文版说明
-├── 文档属性清理工具.bat        源码运行的双击启动器
+├── 文档AI属性清理工具.bat        源码运行的双击启动器
 ├── 示例文件/                  4 个带 AI 痕迹的演示文档，可先拿它们试手
 ├── docs/
 │   ├── screenshot.png        README 界面截图
@@ -187,7 +187,7 @@ pyinstaller --noconfirm doc_meta_cleaner.spec   # 本地构建单文件 exe（�
 
 发版：推送 `vX.Y.Z` 标签后，Release 工作流会自动跑全量测试、构建 Windows 单文件 exe 并连同源码包一起发布 GitHub Release。
 
-> 注意：双击启动器 `文档属性清理工具.bat` 必须保持 ASCII + CRLF 格式保存，不要用编辑器修改后另存为 UTF-8；若损坏，运行 `python tests/_make_bat.py` 重新生成即可。
+> 注意：双击启动器 `文档AI属性清理工具.bat` 必须保持 ASCII + CRLF 格式保存，不要用编辑器修改后另存为 UTF-8；若损坏，运行 `python tests/_make_bat.py` 重新生成即可。
 
 ## 📄 许可证
 

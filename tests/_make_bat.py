@@ -8,7 +8,7 @@ ROOT = os.path.dirname(HERE)
 src = open(os.path.join(HERE, '_bat_template.txt'), encoding='utf-8').read()
 src = src.replace('\r\n', '\n').replace('\n', '\r\n')
 data = src.encode('gbk')
-bat = os.path.join(ROOT, '文档属性清理工具.bat')
+bat = os.path.join(ROOT, '文档AI属性清理工具.bat')
 with open(bat, 'wb') as f:
     f.write(data)
 

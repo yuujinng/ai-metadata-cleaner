@@ -20,7 +20,7 @@ from PyInstaller.utils.win32.versioninfo import (
 # exe 文件名必须保持 ASCII：GitHub Release 资产上传 API 不接受非 ASCII 名称，
 # 中文名会被 softprops/action-gh-release 降级成 default.exe。
 # 中文产品名保留在下方版本资源（右键 → 详细信息）里。
-APP_NAME = 'DocMetaCleaner'
+APP_NAME = 'AIMetadataCleaner'
 APP_VERSION = os.environ.get('PYI_VERSION', '1.0.0.0').lstrip('v')
 
 
@@ -44,8 +44,8 @@ def _make_version_file(version):
                     StringTable(
                         '080404B0',
                         [
-                            StringStruct('CompanyName', 'doc-meta-cleaner'),
-                            StringStruct('FileDescription', '文档属性清理工具 - 清除 Word/Excel/PPT/PDF 的属性（元数据）'),
+                            StringStruct('CompanyName', 'ai-metadata-cleaner'),
+                            StringStruct('FileDescription', '文档AI属性清理工具 - 清除 Word/Excel/PPT/PDF 的属性（元数据）'),
                             StringStruct('FileVersion', version),
                             StringStruct('InternalName', APP_NAME),
                             StringStruct('LegalCopyright', 'MIT License (c) 2026 yuujinng'),

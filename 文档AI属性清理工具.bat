@@ -1,5 +1,5 @@
 @echo off
-rem Launcher for Document Metadata Cleaner (ASCII only - do not add non-ASCII text)
+rem Launcher for AI Metadata Cleaner (ASCII only - do not add non-ASCII text)
 cd /d "%~dp0"
 
 set PY=

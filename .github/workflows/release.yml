@@ -24,7 +24,7 @@ jobs:
           python tests/gui_smoke.py
           python tests/cli_smoke.py
       - name: 打包源码 zip（遵循 .gitattributes）
-        run: git archive --format=zip --output doc-meta-cleaner-${{ github.ref_name }}.zip HEAD
+        run: git archive --format=zip --output ai-metadata-cleaner-${{ github.ref_name }}.zip HEAD
       - name: 构建 Windows 单文件 exe（无需安装 Python）
         env:
           PYI_VERSION: ${{ github.ref_name }}
@@ -33,10 +33,10 @@ jobs:
           pyinstaller --noconfirm doc_meta_cleaner.spec
       - name: exe 冒烟测试
         run: |
-          Copy-Item "dist/DocMetaCleaner.exe" "$env:TEMP\smoke_app.exe"
+          Copy-Item "dist/AIMetadataCleaner.exe" "$env:TEMP\smoke_app.exe"
           $p = Start-Process "$env:TEMP\smoke_app.exe" -PassThru
           Start-Sleep -Seconds 15
-          $wins = Get-Process | Where-Object { $_.MainWindowTitle -like '*文档属性清理工具*' }
+          $wins = Get-Process | Where-Object { $_.MainWindowTitle -like '*文档AI属性清理工具*' }
           if (-not $wins) { Write-Error "exe 启动后主窗口未出现"; exit 1 }
           Write-Output "窗口正常：$($wins[0].MainWindowTitle)"
           $wins | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -44,24 +44,24 @@ jobs:
       - name: 计算 exe 的 SHA256
         id: sha
         run: |
-          $hash = (Get-FileHash dist/DocMetaCleaner.exe -Algorithm SHA256).Hash
+          $hash = (Get-FileHash dist/AIMetadataCleaner.exe -Algorithm SHA256).Hash
           "hash=$hash" >> $env:GITHUB_OUTPUT
       - name: 创建 GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            doc-meta-cleaner-*.zip
-            dist/DocMetaCleaner.exe
+            ai-metadata-cleaner-*.zip
+            dist/AIMetadataCleaner.exe
           # 「更新内容」默认一句话兜底；发版后可在 Release 页点编辑替换成变更要点
           body: |
             ## 下载
 
             | 文件 | 说明 |
             | --- | --- |
-            | `DocMetaCleaner.exe` | 单文件程序，双击即用，**无需安装 Python**，离线可用 |
-            | `doc-meta-cleaner-*.zip` | 源码包，解压后按 README「快速开始」运行 |
+            | `AIMetadataCleaner.exe` | 单文件程序，双击即用，**无需安装 Python**，离线可用 |
+            | `ai-metadata-cleaner-*.zip` | 源码包，解压后按 README「快速开始」运行 |
 
-            **SHA256**：`${{ steps.sha.outputs.hash }}`（DocMetaCleaner.exe，可用 `Get-FileHash` 核对）
+            **SHA256**：`${{ steps.sha.outputs.hash }}`（AIMetadataCleaner.exe，可用 `Get-FileHash` 核对）
 
             > 浏览器或 Windows SmartScreen 可能提示「未知发布者 / 已保护你的电脑」：exe 尚未做数字签名，点「更多信息 → 仍要运行」即可。个别杀毒软件可能误报（PyInstaller 打包的常见现象），加入信任列表即可。
 

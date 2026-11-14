@@ -1,5 +1,7 @@
 <div align="center">
 
+[English](README.en.md) | 简体中文
+
 # 🧹 文档属性清理工具
 
 **一键清除或修改 Word / Excel / PPT / PDF 的属性（元数据），抹掉 AI 生成痕迹**
@@ -16,6 +18,8 @@
 <img src="docs/screenshot.png" alt="界面预览：AI 痕迹自动标红勾选" width="720"/>
 
 *拖入文件 → 疑似 AI 痕迹自动标红并勾选 → 一键清理*
+
+<img src="docs/demo.gif" alt="演示动图：拖入文件 → AI 痕迹标红勾选 → 一键清理，日志逐文件报告" width="720"/>
 
 </div>
 
@@ -140,7 +144,6 @@ python doc_meta_cli.py --list-fields    # 查看全部可操作的字段
 
 ## ❓ 常见问题
 
-- **双击后窗口一闪而过 / 报错**：启动器必须保持 ASCII + CRLF 格式保存，不要用编辑器修改后另存为 UTF-8。若损坏，可运行 `python tests/_make_bat.py` 重新生成。
 - **双击 exe 被 SmartScreen 拦截 / 杀毒软件报警**：exe 未做数字签名且由 PyInstaller 打包，属于常见误报；点「更多信息 → 仍要运行」，或改用方式二（源码运行）。
 - **提示找不到 Python**：安装 Python 3 时勾选 "Add Python to PATH"，或改用命令行 `python doc_meta_cleaner.py` 启动；不想装 Python 请直接用 Releases 里的 exe。
 - **PDF 文件添加失败**：看界面日志最上方是否提示「PDF 支持：未安装」，手动运行 `pip install pypdf` 后重开工具即可。
@@ -153,16 +156,19 @@ doc-meta-cleaner/
 ├── doc_meta_cleaner.py       核心逻辑 + 图形界面
 ├── doc_meta_cli.py           命令行入口（scan / clean / set）
 ├── doc_meta_cleaner.spec     PyInstaller 打包配置（构建 Windows exe）
+├── README.en.md              英文版说明
 ├── 文档属性清理工具.bat        源码运行的双击启动器
 ├── 示例文件/                  4 个带 AI 痕迹的演示文档，可先拿它们试手
 ├── docs/
-│   └── screenshot.png        README 界面截图
+│   ├── screenshot.png        README 界面截图
+│   └── demo.gif              README 演示动图
 ├── tests/
 │   ├── run_tests.py          核心逻辑自动化测试
 │   ├── gui_smoke.py          GUI 冒烟测试
 │   ├── cli_smoke.py          CLI 冒烟测试
 │   ├── _make_bat.py          重新生成启动器
-│   └── _make_screenshot.py   重新生成 README 截图
+│   ├── _make_screenshot.py   重新生成 README 截图
+│   └── _make_gif.py          重新生成 README 演示动图
 └── .github/
     ├── ISSUE_TEMPLATE/       Issue 模板
     └── workflows/            CI 与 Release（打 v* 标签自动发布）
@@ -180,6 +186,8 @@ pyinstaller --noconfirm doc_meta_cleaner.spec   # 本地构建单文件 exe（�
 ```
 
 发版：推送 `vX.Y.Z` 标签后，Release 工作流会自动跑全量测试、构建 Windows 单文件 exe 并连同源码包一起发布 GitHub Release。
+
+> 注意：双击启动器 `文档属性清理工具.bat` 必须保持 ASCII + CRLF 格式保存，不要用编辑器修改后另存为 UTF-8；若损坏，运行 `python tests/_make_bat.py` 重新生成即可。
 
 ## 📄 许可证
 

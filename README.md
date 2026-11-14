@@ -15,11 +15,11 @@
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/平台-Windows%2010%2F11-0078D6?style=flat-square&logo=windows11&logoColor=white)](https://github.com/yuujinng/ai-metadata-cleaner#快速开始)
 
-<img src="docs/screenshot.png?v=1.2" alt="界面预览：AI 痕迹自动标红勾选" width="720"/>
+<img src="docs/screenshot.png?v=1.3" alt="界面预览：AI 痕迹自动标红勾选" width="720"/>
 
 *拖入文件 → 疑似 AI 痕迹自动标红并勾选 → 一键清理*
 
-<img src="docs/demo.gif?v=1.3" alt="演示动图：拖入文件 → AI 痕迹标红勾选 → 一键清理（进度条），列表逐个标「已另存 ✓」" width="720"/>
+<img src="docs/demo.gif?v=1.4" alt="演示动图：拖入文件 → AI 痕迹标红勾选 → 一键清理（进度条），列表逐个标「已另存 ✓」" width="720"/>
 
 </div>
 
@@ -28,7 +28,8 @@
 ## ✨ 特性
 
 - 🤖 **AI 痕迹自动识别** — `ChatGPT`、`Claude`、`python-docx`、`openpyxl`、`Skia/PDF` 等生成来源自动标红；作者/生成程序/时间统计类字段默认勾选，标题等正文类字段只提示不自动删（防误删）
-- 🧽 **彻底清除** — 作者、最后修改者、应用程序、创建/修改时间、编辑统计、公司、自定义属性、PDF 的 Info 字典与 XMP 元数据包……
+- 🧬 **结构指纹识别** — 不靠关键词也能看穿脚本一次性生成：正文有字而字数统计为 0、文档内部时间与文件时间相差一年以上（生成库模板冻结日期）、Mac 版 Word 残留、脚本库版本号、WPS 云文档指纹（ICV）、Word/Excel 不该有的缩略图、PDF 的 anonymous/untitled 缺省值
+- 🧽 **彻底清除** — 作者、最后修改者、应用程序、创建/修改时间、编辑统计、公司、自定义属性、文档缩略图、ZIP 包内时间戳指纹、PDF 的 Info 字典与 XMP 元数据包……
 - ✏️ **随意修改** — 任意属性改成任意值，支持"应用到所有文件"批量统一，日期自动转成文档标准格式
 - 🖱️ **拖拽即用** — 文件或整个文件夹（递归扫描）直接拖进窗口
 - ⚡ **后台处理不卡界面** — 扫描与清理都在后台线程进行，整目录大批量也有进度条；结果直接标记在文件列表（悬停显示完整路径），保存方式、勾选偏好与窗口大小会被记住
@@ -42,10 +43,13 @@
 | 痕迹类型 | 典型表现 |
 | --- | --- |
 | 作者 / 最后修改者 | `ChatGPT`、`Claude`、`python-docx` 等 |
-| 应用程序 | 生成程序显示为脚本库（openpyxl、pandoc、Skia/PDF 等） |
-| 时间特征 | 创建时间与修改时间精确到秒完全相同 |
-| 编辑统计 | 总编辑时间为 0 分钟 |
-| PDF 内嵌信息 | Info 字典中的 Producer/Creator、XMP 元数据包、页面级内嵌元数据 |
+| 应用程序 | 生成程序显示为脚本库（openpyxl、pandoc、Skia/PDF、LibreOffice、pdfTeX 等） |
+| 时间特征 | 创建时间与修改时间精确到秒完全相同；文档内部时间比文件修改时间早一年以上（python-docx 模板冻在 2013 年）或晚于当前时间 |
+| 编辑统计 | 总编辑时间为 0 分钟；正文有字而字数/字符数/行数统计为 0（Office 保存时会自动重算，脚本不会） |
+| 应用程序矛盾 | Windows 上交出 "Microsoft Macintosh Word" 生成的文档；openpyxl 的 `3.1` 式非 Office 版本号；修订号 1 且编辑时间 0 |
+| WPS 云文档指纹 | 自定义属性 `ICV`（云文档 GUID）、`KSOProductBuildVer`，值里不含任何关键词 |
+| 缩略图残留 | Word/Excel 默认不生成 `docProps/thumbnail.jpeg`，出现即多为生成库模板残留 |
+| PDF 内嵌信息 | Info 字典中的 Producer/Creator、XMP 元数据包、页面级内嵌元数据、`anonymous`/`untitled` 缺省值 |
 | 其他 | 公司、经理、自定义属性、超链接基础里的本机路径等 |
 
 > 「疑似 AI 痕迹」按关键词和规则自动识别，可能有漏报/误报，清理前请过目一遍勾选列表。
@@ -96,6 +100,7 @@ python doc_meta_cleaner.py
 - 该文件没有的字段（如类别、PDF 主题）保存后会自动新建；自定义属性只能改已有的值，不能新建；
 - 点**撤销全部修改**可取消尚未处理的修改项；
 - PDF 的 XMP 元数据包不支持逐项编辑，只能整体清除；但修改/清除 Info 字段时会自动同步 XMP，不会残留旧值。
+- 文档缩略图同样只能整体清除（勾选后连同包内登记一并摘除），不支持逐项编辑。
 
 ## ⌨️ 命令行用法
 
@@ -132,7 +137,8 @@ python doc_meta_cli.py --list-fields    # 查看全部可操作的字段
 
 ## 🔒 清理原理（安全边界）
 
-- Office 文档本质是 ZIP+XML 包，工具只改写 `docProps/core.xml`、`docProps/app.xml`、`docProps/custom.xml` 三个属性部件，**正文、样式、图片等其余内容逐字节保留**，不影响文档显示；新建字段会按文档规范插入到正确位置，文件缺少属性部件时也会自动新建并登记，保证 Word/Excel/PPT 正常打开。
+- Office 文档本质是 ZIP+XML 包，工具只改写 `docProps/core.xml`、`docProps/app.xml`、`docProps/custom.xml` 三个属性部件（清除缩略图时会额外摘除 `docProps/thumbnail.jpeg` 及其在包关系与 [Content_Types] 里的登记，不留悬空引用），**正文、样式、图片等其余内容逐字节保留**，不影响文档显示；新建字段会按文档规范插入到正确位置，文件缺少属性部件时也会自动新建并登记，保证 Word/Excel/PPT 正常打开。
+- 重建 ZIP 包时若发现 entry 时间戳呈脚本特征（全部相同或年份异常——Word 渐进保存的时间戳是分布开的，脚本一次性写出则完全相同），会把它们统一归一化为文件的修改时间；原本就正常的包保持原样。
 - PDF 通过 pypdf 克隆后改写 Info 字典字段与 /Metadata(XMP)（含挂在页面对象上的内嵌元数据），页面内容不变；修改/清除 Info 字段时会同步改写 XMP 包，不会残留旧值。
 - 「覆盖原文件」模式先写临时文件再原子替换，失败不会破坏原文件。
 - 清理不改动文件的系统时间：覆盖模式完整保留文件的创建/修改/访问时间（Windows 创建时间一并恢复），另存副本沿用原文件的修改时间，不会留下"刚刚被处理过"的痕迹。
@@ -170,7 +176,8 @@ ai-metadata-cleaner/
 │   ├── cli_smoke.py          CLI 冒烟测试
 │   ├── _make_bat.py          重新生成启动器
 │   ├── _make_screenshot.py   重新生成 README 截图
-│   └── _make_gif.py          重新生成 README 演示动图
+│   ├── _make_gif.py          重新生成 README 演示动图
+│   └── _win_capture.py       素材抓图工具（截图/动图共用，抓屏失败回退 PrintWindow）
 └── .github/
     ├── ISSUE_TEMPLATE/       Issue 模板
     └── workflows/            CI 与 Release（打 v* 标签自动发布）

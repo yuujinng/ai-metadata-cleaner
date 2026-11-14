@@ -164,7 +164,7 @@ def _build_set_ops(entry, path, assigns):
     checked, edits = [], {}
     for key, raw in assigns:
         key = _canon_key(key, entry)
-        if key in (dmc.XMP_KEY, dmc.PAGEMETA_KEY):
+        if key in (dmc.XMP_KEY, dmc.PAGEMETA_KEY, dmc.THUMB_KEY):
             raise ValueError('%s 不支持逐项编辑，只能整体清除（clean --fields %s）'
                              % (key, key))
         if raw == '':
@@ -272,7 +272,8 @@ def _parse_assigns(assign_pairs):
 def print_fields():
     rows = list(dmc.CORE_FIELDS.items()) + list(dmc.APP_FIELDS.items())
     rows += [('pdf:' + k, n) for k, n in dmc.PDF_FIELDS.items()]
-    rows += [(dmc.XMP_KEY, dmc.XMP_NAME), (dmc.PAGEMETA_KEY, dmc.PAGEMETA_NAME)]
+    rows += [(dmc.THUMB_KEY, dmc.THUMB_NAME),
+             (dmc.XMP_KEY, dmc.XMP_NAME), (dmc.PAGEMETA_KEY, dmc.PAGEMETA_NAME)]
     width = max(_width(k) for k, _n in rows)
     print('字段 key                     名称')
     for k, n in rows:

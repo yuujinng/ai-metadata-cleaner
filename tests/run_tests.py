@@ -4,7 +4,7 @@ import os
 import shutil
 import sys
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -96,15 +96,125 @@ DOCUMENT_XML = (
 )
 
 
-def build_ooxml(path, main_part, main_target):
+REL_THUMB = ('<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/'
+             'package/2006/relationships/metadata/thumbnail" '
+             'Target="docProps/thumbnail.jpeg"/>')
+
+# Word 渐进保存的 entry 时间戳（彼此错开、年份正常）
+VARY_TIMES = ((2024, 3, 5, 10, 0, 0), (2024, 3, 5, 10, 5, 12), (2024, 3, 5, 10, 9, 30))
+
+
+def build_ooxml(path, main_part, main_target,
+                core_xml=CORE_XML, app_xml=APP_XML, custom_xml=CUSTOM_XML,
+                thumb=False, vary_times=False):
+    """构建 OOXML fixture。thumb=True 时带缩略图部件（含 CT/关系登记）；
+    vary_times=True 时各部件使用不同的 entry 时间戳（模拟 Word 渐进保存）。"""
     with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as z:
         ct = CONTENT_TYPES_DOCX.replace('/word/document.xml', '/' + main_target)
-        z.writestr('[Content_Types].xml', ct)
-        z.writestr('_rels/.rels', RELS.replace('word/document.xml', main_target))
-        z.writestr(main_target, main_part)
-        z.writestr('docProps/core.xml', CORE_XML)
-        z.writestr('docProps/app.xml', APP_XML)
-        z.writestr('docProps/custom.xml', CUSTOM_XML)
+        rels = RELS.replace('word/document.xml', main_target)
+        if thumb:
+            ct = ct.replace('</Types>',
+                '<Override PartName="/docProps/thumbnail.jpeg" '
+                'ContentType="image/jpeg"/></Types>')
+            rels = rels.replace('</Relationships>', REL_THUMB + '</Relationships>')
+        entries = [('[Content_Types].xml', ct), ('_rels/.rels', rels),
+                   (main_target, main_part),
+                   ('docProps/core.xml', core_xml), ('docProps/app.xml', app_xml),
+                   ('docProps/custom.xml', custom_xml)]
+        if thumb:
+            entries.append(('docProps/thumbnail.jpeg', b'\xff\xd8\xff\xe0fake-jpeg'))
+        for i, (name, data) in enumerate(entries):
+            if vary_times:
+                info = zipfile.ZipInfo(name, date_time=VARY_TIMES[i % len(VARY_TIMES)])
+                info.compress_type = zipfile.ZIP_DEFLATED
+                z.writestr(info, data)
+            else:
+                z.writestr(name, data)
+
+
+# 结构指纹样例：模拟 python-docx/openpyxl 类生成库产物——
+# 模板冻结日期（2013）、统计字段全 0、Mac 版 Word 痕迹、脚本库版本号、WPS ICV
+CORE_XML2 = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n'
+    '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"'
+    ' xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/"'
+    ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+    '<dc:title>AI 起草的测试报告</dc:title>'
+    '<dc:creator>python-docx</dc:creator>'
+    '<cp:revision>1</cp:revision>'
+    '<dcterms:created xsi:type="dcterms:W3CDTF">2013-12-23T23:15:00Z</dcterms:created>'
+    '<dcterms:modified xsi:type="dcterms:W3CDTF">2013-12-23T23:15:00Z</dcterms:modified>'
+    '</cp:coreProperties>'
+)
+
+APP_XML2 = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n'
+    '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"'
+    ' xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">'
+    '<Template>Normal.dotm</Template>'
+    '<TotalTime>0</TotalTime>'
+    '<Pages>1</Pages>'
+    '<Words>0</Words>'
+    '<Characters>0</Characters>'
+    '<Application>Microsoft Macintosh Word</Application>'
+    '<AppVersion>3.1</AppVersion>'
+    '<Lines>0</Lines>'
+    '<Paragraphs>0</Paragraphs>'
+    '<CharactersWithSpaces>0</CharactersWithSpaces>'
+    '</Properties>'
+)
+
+CUSTOM_XML2 = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n'
+    '<Properties xmlns="http://schemas.openxmlformats.org/officedocument/2006/custom-properties"'
+    ' xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">'
+    '<Property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="2" name="ICV">'
+    '<vt:lpstr>1A2B3C4D5E6F7081A2B3C4D5E6F7081A</vt:lpstr></Property>'
+    '</Properties>'
+)
+
+# "正常 Word 保存"样例：统计真实、版本正常、时间新鲜，不应误报
+_R3 = (datetime.now(timezone.utc) - timedelta(days=3)).strftime('%Y-%m-%dT%H:%M:%SZ')
+_R1 = (datetime.now(timezone.utc) - timedelta(days=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
+CORE_XML3 = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n'
+    '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"'
+    ' xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/"'
+    ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+    '<dc:title>课程实验报告</dc:title>'
+    '<dc:creator>张三</dc:creator>'
+    '<cp:lastModifiedBy>张三</cp:lastModifiedBy>'
+    '<cp:revision>5</cp:revision>'
+    '<dcterms:created xsi:type="dcterms:W3CDTF">%s</dcterms:created>'
+    '<dcterms:modified xsi:type="dcterms:W3CDTF">%s</dcterms:modified>'
+    '</cp:coreProperties>'
+) % (_R3, _R1)
+
+APP_XML3 = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n'
+    '<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"'
+    ' xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">'
+    '<Template>Normal.dotm</Template>'
+    '<TotalTime>38</TotalTime>'
+    '<Pages>3</Pages>'
+    '<Words>850</Words>'
+    '<Characters>4200</Characters>'
+    '<Application>Microsoft Office Word</Application>'
+    '<AppVersion>16.0000</AppVersion>'
+    '<Lines>40</Lines>'
+    '<Paragraphs>18</Paragraphs>'
+    '<CharactersWithSpaces>5000</CharactersWithSpaces>'
+    '</Properties>'
+)
+
+CUSTOM_XML3 = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n'
+    '<Properties xmlns="http://schemas.openxmlformats.org/officedocument/2006/custom-properties"'
+    ' xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">'
+    '<Property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="2" name="Reviewer">'
+    '<vt:lpstr>李四</vt:lpstr></Property>'
+    '</Properties>'
+)
 
 
 def make_pdf(path):
@@ -620,12 +730,157 @@ def test_edit_missing_parts():
           '/docProps/core.xml' in ct2 and 'docProps/core.xml' in rels2)
 
 
+def test_structural_fingerprints():
+    """结构指纹：统计字段矛盾 / 模板冻结日期 / Mac Word / 脚本库版本号 /
+    WPS ICV / 缩略图，以及默认勾选与清理闭环。"""
+    src = os.path.join(OUT, 'fp.docx')
+    build_ooxml(src, DOCUMENT_XML, 'word/document.xml',
+                core_xml=CORE_XML2, app_xml=APP_XML2, custom_xml=CUSTOM_XML2,
+                thumb=True)
+    entry = dmc.scan_file(src)
+    s = entry['suspects']
+    for k in ('Application', 'AppVersion', 'TotalTime', 'revision',
+              'custom:ICV', 'created', 'modified',
+              'app:Words', 'app:Characters', 'app:Lines', 'app:Paragraphs',
+              'app:CharactersWithSpaces', dmc.THUMB_KEY):
+        check('结构指纹判为痕迹: ' + k, k in s, s)
+    check('Pages=1 不算痕迹', 'app:Pages' not in s, s)
+    check('标题仍只提示不判', 'title' not in s, s)
+    check('缩略图自动勾选', dmc.is_auto_checkable(dmc.THUMB_KEY))
+    check('AppVersion 14.0000 样式不判',
+          'AppVersion' not in dmc.scan_file(os.path.join(OUT, 'sample.docx'))['suspects']
+          or dmc.scan_file(os.path.join(OUT, 'sample.docx'))['props'].get('AppVersion') != '14.0000')
+
+    # 默认（自动勾选）清理闭环
+    keys = [k for k in entry['suspects'] if dmc.is_auto_checkable(k)]
+    check('全部痕迹可自动勾选', set(keys) == set(entry['suspects']), keys)
+    dest, removed, edited = dmc.clean_file(entry, keys, {}, 'copy')
+    check('缩略图出现在清除报告', dmc.THUMB_KEY in removed, removed)
+    after = dmc.scan_file(dest)
+    check('清理后自动勾选痕迹为零',
+          not [k for k in after['suspects'] if dmc.is_auto_checkable(k)],
+          after['suspects'])
+    for k in ('Application', 'AppVersion', 'TotalTime', 'revision',
+              'created', 'modified', 'custom:ICV',
+              'app:Words', 'app:Characters'):
+        check('已删除: ' + k, k not in after['props'])
+    check('标题保留', after['props'].get('title') == 'AI 起草的测试报告')
+
+    with zipfile.ZipFile(dest) as z, zipfile.ZipFile(src) as zs:
+        names = z.namelist()
+        check('缩略图部件已剔除', not any('thumbnail' in n.lower() for n in names), names)
+        rels = z.read('_rels/.rels').decode('utf-8')
+        ct = z.read('[Content_Types].xml').decode('utf-8')
+        check('关系已无 thumbnail 引用', 'thumbnail' not in rels, rels)
+        check('CT 已无 thumbnail 登记', 'thumbnail' not in ct, ct)
+        import xml.etree.ElementTree as ET
+        ET.fromstring(rels)
+        ET.fromstring(ct)
+        check('正文部件逐字节保留',
+              z.read('word/document.xml') == zs.read('word/document.xml'))
+        times = {i.date_time for i in z.infolist()}
+        lt = os.path.getmtime(src)
+        import time as _time
+        check('脚本时间戳归一化为文件修改时间',
+              len(times) == 1 and list(times)[0][:5] == _time.localtime(lt)[:5],
+              times)
+
+
+def test_zip_timestamps():
+    """Word 渐进保存的包（时间戳彼此错开）清理后保持原样，不被归一化。"""
+    src = os.path.join(OUT, 'vary.docx')
+    build_ooxml(src, DOCUMENT_XML, 'word/document.xml', vary_times=True)
+    entry = dmc.scan_file(src)
+    dest, _r, _e = dmc.clean_file(entry, ['creator'], {}, 'copy')
+    with zipfile.ZipFile(src) as zs, zipfile.ZipFile(dest) as z:
+        ts_src = {i.date_time for i in zs.infolist()}
+        ts_dst = {i.date_time for i in z.infolist()}
+        check('时间戳集合保持不变', ts_src == ts_dst, (ts_src, ts_dst))
+        check('时间戳确实彼此错开', len(ts_src) > 1, ts_src)
+        core = z.read('docProps/core.xml')
+        check('属性改写正常', b'ChatGPT' not in core)
+        import xml.etree.ElementTree as ET
+        ET.fromstring(core)
+
+
+def test_pdf_defaults_and_stale():
+    """PDF 脚本库缺省值（anonymous/untitled）与模板冻结日期。"""
+    import pypdf
+    src = os.path.join(OUT, 'defaults.pdf')
+    w = pypdf.PdfWriter()
+    w.add_blank_page(300, 400)
+    w.add_metadata({'/Title': 'untitled', '/Author': 'anonymous',
+                    '/Creator': 'anonymous', '/Subject': 'unspecified',
+                    '/CreationDate': 'D:20130102030405Z',
+                    '/ModDate': 'D:20130102030405Z'})
+    with open(src, 'wb') as f:
+        w.write(f)
+    entry = dmc.scan_file(src)
+    s = entry['suspects']
+    for k in ('pdf:Author', 'pdf:Creator', 'pdf:Title',
+              'pdf:CreationDate', 'pdf:ModDate'):
+        check('pdf 缺省值/冻结日期判为痕迹: ' + k, k in s, s)
+    check('pdf Subject=unspecified 暂不判（弱信号）', 'pdf:Subject' not in s, s)
+    keys = [k for k in s if dmc.is_auto_checkable(k)]
+    check('pdf 作者/时间类可自动勾选',
+          set(keys) == {'pdf:Author', 'pdf:Creator', 'pdf:CreationDate', 'pdf:ModDate'},
+          keys)
+    dest, removed, _e = dmc.clean_file(entry, keys, {}, 'copy')
+    after = dmc.scan_file(dest)
+    for k in keys:
+        check('pdf 已删除: ' + k, k not in after['props'])
+    check('pdf Title 保留（仅提示）', after['props'].get('pdf:Title') == 'untitled')
+
+
+def test_no_false_positives():
+    """正常 Word 保存的文档不应命中任何结构指纹规则。"""
+    src = os.path.join(OUT, 'normal.docx')
+    build_ooxml(src, DOCUMENT_XML, 'word/document.xml',
+                core_xml=CORE_XML3, app_xml=APP_XML3, custom_xml=CUSTOM_XML3)
+    entry = dmc.scan_file(src)
+    check('正常文档零误报', entry['suspects'] == set(), entry['suspects'])
+
+    # 只有 created 偏旧、modified 正常：多年旧稿仍在维护，不算痕迹
+    core_old = CORE_XML3.replace(_R3, '2020-01-01T08:00:00Z')
+    src2 = os.path.join(OUT, 'old_cre.docx')
+    build_ooxml(src2, DOCUMENT_XML, 'word/document.xml',
+                core_xml=core_old, app_xml=APP_XML3, custom_xml=CUSTOM_XML3)
+    s2 = dmc.scan_file(src2)['suspects']
+    check('仅 created 偏旧不判', 'created' not in s2 and 'modified' not in s2, s2)
+
+    # 未来时间：直接判为痕迹
+    core_future = CORE_XML3.replace(
+        _R3, (datetime.now(timezone.utc) + timedelta(days=30)).strftime('%Y-%m-%dT%H:%M:%SZ'))
+    src3 = os.path.join(OUT, 'future.docx')
+    build_ooxml(src3, DOCUMENT_XML, 'word/document.xml',
+                core_xml=core_future, app_xml=APP_XML3, custom_xml=CUSTOM_XML3)
+    s3 = dmc.scan_file(src3)['suspects']
+    check('未来 created 判为痕迹', 'created' in s3, s3)
+
+    # WPS 文档：Application 正常但带 ICV，按属性名识别
+    custom_wps = CUSTOM_XML3.replace('name="Reviewer"><vt:lpstr>李四</vt:lpstr>',
+                                     'name="ICV"><vt:lpstr>AABBCCDDEEFF0011AABBCCDDEEFF0011</vt:lpstr>')
+    src4 = os.path.join(OUT, 'wps.docx')
+    build_ooxml(src4, DOCUMENT_XML, 'word/document.xml',
+                core_xml=CORE_XML3, app_xml=APP_XML3, custom_xml=custom_wps)
+    s4 = dmc.scan_file(src4)['suspects']
+    check('WPS ICV 判为痕迹', 'custom:ICV' in s4, s4)
+    check('WPS 文档其余不误报', s4 == {'custom:ICV'}, s4)
+    check('LibreOffice 生成程序判为痕迹',
+          dmc.looks_like_ai('LibreOffice 7.6', strict=True))
+    check('LaTeX 生成程序判为痕迹', dmc.looks_like_ai('pdfTeX-1.40.21', strict=True))
+
+
 def main():
     make_samples()
     test_scan()
     test_clean_copy()
     test_clean_overwrite()
     test_clean_pdf()
+    test_structural_fingerprints()
+    test_zip_timestamps()
+    test_pdf_defaults_and_stale()
+    test_no_false_positives()
     test_edit_ooxml()
     test_edit_apply_all_and_skip()
     test_edit_pdf()

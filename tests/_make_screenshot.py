@@ -19,7 +19,7 @@ except Exception:
     pass
 
 import doc_meta_cleaner as dmc  # noqa: E402
-from PIL import ImageGrab  # noqa: E402
+from _win_capture import grab_window  # noqa: E402
 
 out_path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, 'docs', 'screenshot.png')
 os.makedirs(os.path.dirname(out_path), exist_ok=True)
@@ -41,11 +41,12 @@ app.update()
 def snap():
     try:
         hwnd = ctypes.windll.user32.GetParent(app.winfo_id())
-        ctypes.windll.user32.SetForegroundWindow(hwnd)
+        try:
+            ctypes.windll.user32.SetForegroundWindow(hwnd)
+        except Exception:
+            pass
         app.update()
-        x, y = app.winfo_rootx(), app.winfo_rooty()
-        w, h = app.winfo_width(), app.winfo_height()
-        img = ImageGrab.grab(bbox=(x, y, x + w, y + h))
+        img = grab_window(app)
         img.save(out_path)
         print('saved:', out_path, img.size)
     finally:

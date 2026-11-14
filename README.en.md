@@ -15,11 +15,11 @@
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/平台-Windows%2010%2F11-0078D6?style=flat-square&logo=windows11&logoColor=white)](https://github.com/yuujinng/ai-metadata-cleaner#-quick-start)
 
-<img src="docs/screenshot.png?v=1.2" alt="App preview: suspected AI traces highlighted in red and pre-checked" width="720"/>
+<img src="docs/screenshot.png?v=1.3" alt="App preview: suspected AI traces highlighted in red and pre-checked" width="720"/>
 
 *Drop files in → suspected AI traces get highlighted and pre-checked → clean with one click*
 
-<img src="docs/demo.gif?v=1.3" alt="Demo GIF: drop files → traces highlighted and checked → one-click cleanup with progress bar, files marked saved in the list" width="720"/>
+<img src="docs/demo.gif?v=1.4" alt="Demo GIF: drop files → traces highlighted and checked → one-click cleanup with progress bar, files marked saved in the list" width="720"/>
 
 </div>
 
@@ -28,7 +28,8 @@
 ## ✨ Features
 
 - 🤖 **Automatic AI-trace detection** — sources such as `ChatGPT`, `Claude`, `python-docx`, `openpyxl`, `Skia/PDF` are highlighted automatically; identity fields (author / generator / time statistics) are pre-checked, while content-related fields such as Title are only flagged (to prevent accidental deletion)
-- 🧽 **Thorough cleanup** — author, last-modified-by, application name, created/modified time, editing statistics, company, custom properties, plus PDF's Info dictionary and XMP metadata packet…
+- 🧬 **Structural fingerprinting** — spots one-shot machine generation without relying on keywords: word-count statistics of 0 while the body has text, document-internal times more than a year off the file's modification time (frozen generator-template dates), Mac Word leftovers, script-library version strings, WPS cloud fingerprints (ICV), thumbnails that Word/Excel would never write, and PDF's `anonymous`/`untitled` placeholder defaults
+- 🧽 **Thorough cleanup** — author, last-modified-by, application name, created/modified time, editing statistics, company, custom properties, the document thumbnail, ZIP entry-timestamp fingerprints, plus PDF's Info dictionary and XMP metadata packet…
 - ✏️ **Free editing** — set any property to any value; "apply to all files" batch-unifies a whole batch; dates are converted to the standard document format automatically
 - 🖱️ **Drag & drop** — drop files or entire folders (recursively scanned) straight into the window
 - ⚡ **Background processing** — scanning and cleaning run on a background thread with a progress bar, so even folder-sized batches keep the UI responsive; results are marked in the file list (hover for the full path) and your save-mode / auto-check / window preferences are remembered
@@ -42,10 +43,13 @@
 | Trace type | Typical giveaway |
 | --- | --- |
 | Author / last modified by | `ChatGPT`, `Claude`, `python-docx`, etc. |
-| Application name | Generator shows as a script library (openpyxl, pandoc, Skia/PDF, etc.) |
-| Time pattern | Created and modified time identical down to the second |
-| Editing statistics | Total editing time of 0 minutes |
-| Embedded PDF info | Producer/Creator in the Info dictionary, XMP metadata packet, page-level embedded metadata |
+| Application name | Generator shows as a script library (openpyxl, pandoc, Skia/PDF, LibreOffice, pdfTeX, etc.) |
+| Time pattern | Created and modified time identical down to the second; document-internal times more than a year older than the file's modification time (python-docx freezes its template at 2013) or in the future |
+| Editing statistics | Total editing time of 0 minutes; word/character/line counts of 0 while the body has text (Office recalculates them on save, scripts don't) |
+| Application mismatch | A "Microsoft Macintosh Word" document handed in on Windows; openpyxl's non-Office `3.1` version string; revision 1 with zero editing time |
+| WPS cloud fingerprint | Custom properties `ICV` (a cloud-document GUID) and `KSOProductBuildVer`, whose values contain no keywords at all |
+| Thumbnail leftover | Word/Excel never write `docProps/thumbnail.jpeg` by default — its presence points to a generator template |
+| Embedded PDF info | Producer/Creator in the Info dictionary, XMP metadata packet, page-level embedded metadata, `anonymous`/`untitled` placeholder defaults |
 | Others | Company, manager, custom properties, local paths in hyperlink bases, etc. |
 
 > "Suspected AI traces" are detected by keywords and rules — there may be false positives/negatives, so please review the checklist before cleaning.
@@ -96,6 +100,7 @@ python doc_meta_cleaner.py
 - Fields the file doesn't have (e.g. category, PDF subject) are created automatically on save; custom properties can only be edited if they already exist;
 - Click **Undo all edits** to cancel pending edit items;
 - The PDF XMP packet cannot be edited item by item — it can only be cleared as a whole; but editing/clearing Info fields syncs XMP automatically, so no stale values remain.
+- The document thumbnail can likewise only be cleared as a whole (checked removal also strips its package registration), not edited item by item.
 
 ## ⌨️ Command line
 
@@ -132,7 +137,8 @@ The legacy binary `.doc/.xls/.ppt` formats are not supported yet.
 
 ## 🔒 How cleanup works (safety boundaries)
 
-- Office documents are essentially ZIP+XML packages. The tool only rewrites the three property parts `docProps/core.xml`, `docProps/app.xml`, `docProps/custom.xml` — **body text, styles, images and everything else is preserved byte-for-byte**, so documents display exactly as before. New fields are inserted at the correct position per the document spec; missing property parts are created and registered automatically so Word/Excel/PPT open the file normally.
+- Office documents are essentially ZIP+XML packages. The tool only rewrites the three property parts `docProps/core.xml`, `docProps/app.xml`, `docProps/custom.xml` (clearing the thumbnail additionally removes `docProps/thumbnail.jpeg` together with its package relationship and [Content_Types] registration, leaving no dangling references) — **body text, styles, images and everything else is preserved byte-for-byte**, so documents display exactly as before. New fields are inserted at the correct position per the document spec; missing property parts are created and registered automatically so Word/Excel/PPT open the file normally.
+- When ZIP entry timestamps look machine-made (all identical, or with abnormal years — Word saves progressively so its timestamps spread out, while one-shot script writes are all identical), the rebuilt package normalizes them to the file's modification time. Packages whose timestamps already look normal are left untouched.
 - PDFs are cloned via pypdf, then the Info dictionary and /Metadata (XMP), including metadata embedded on page objects, are rewritten; page content is untouched. Editing/clearing Info fields syncs the XMP packet so no stale values remain.
 - "Overwrite original" writes to a temp file first and replaces atomically; a failure never corrupts the original.
 - Cleaning does not touch the file's system timestamps: overwrite mode fully restores created/modified/accessed times (including the Windows creation time), and copies keep the original's modification time — so nothing says "just processed".
@@ -170,7 +176,10 @@ ai-metadata-cleaner/
 │   ├── cli_smoke.py          CLI smoke test
 │   ├── _make_bat.py          Regenerate the launcher
 │   ├── _make_screenshot.py   Regenerate the README screenshot
-│   └── _make_gif.py          Regenerate the README demo GIF
+│   ├── _make_gif.py          Regenerate the README demo GIF
+│   └── _win_capture.py       Window-capture helper shared by screenshot/GIF
+│                             scripts (falls back to PrintWindow when screen
+│                             grabbing is unavailable, e.g. non-desktop sessions)
 └── .github/
     ├── ISSUE_TEMPLATE/       Issue templates
     └── workflows/            CI & Release (a v* tag auto-publishes)

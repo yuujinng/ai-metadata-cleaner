@@ -22,7 +22,8 @@ except Exception:
     pass
 
 import doc_meta_cleaner as dmc  # noqa: E402
-from PIL import Image, ImageDraw, ImageFont, ImageGrab  # noqa: E402
+from PIL import Image, ImageDraw, ImageFont  # noqa: E402
+from _win_capture import grab_window  # noqa: E402
 
 out_path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, 'docs', 'demo.gif')
 os.makedirs(os.path.dirname(out_path), exist_ok=True)
@@ -77,9 +78,7 @@ def snap(caption=None, dur=700):
     except Exception:
         pass
     app.update()
-    x, y = app.winfo_rootx(), app.winfo_rooty()
-    w, h = app.winfo_width(), app.winfo_height()
-    img = ImageGrab.grab(bbox=(x, y, x + w, y + h))
+    img = grab_window(app)
     if caption:
         img = add_caption(img, caption)
     frames.append((img, dur))

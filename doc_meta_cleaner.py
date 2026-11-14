@@ -30,7 +30,7 @@ import time
 import traceback
 import zipfile
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import tkinter as tk
 from tkinter import ttk
@@ -95,6 +95,25 @@ XMP_KEY = 'pdf:xmp'
 XMP_NAME = 'XMP 元数据包（内嵌 XML，可能重复包含以上信息）'
 PAGEMETA_KEY = 'pdf:pagemeta'
 PAGEMETA_NAME = '页面级元数据（挂在页面对象上的内嵌 XML）'
+THUMB_KEY = 'ooxml:thumbnail'
+THUMB_NAME = '文档缩略图（docProps/thumbnail.jpeg，Word/Excel 默认不生成，多为生成库模板残留）'
+THUMB_PREFIX = 'docprops/thumbnail.'   # 小写常量：统一配合 n.lower() 做前缀比较
+THUMB_REL_SUFFIX = '/metadata/thumbnail'
+
+# app.xml 里 Office 的统计字段（Office 保存时自动计算；脚本生成的文档
+# 往往保留模板默认值——正文有字而统计为 0，属性面板里一眼可见）
+APP_STAT_KEYS = ('app:Pages', 'app:Words', 'app:Characters',
+                 'app:Lines', 'app:Paragraphs', 'app:CharactersWithSpaces')
+APP_STAT_NAMES = {
+    'Pages': '页数', 'Words': '字数', 'Characters': '字符数',
+    'Lines': '行数', 'Paragraphs': '段落数', 'CharactersWithSpaces': '字符数（计空格）',
+    'Slides': '幻灯片数', 'Notes': '备注页数', 'HiddenSlides': '隐藏幻灯片数',
+    'MMClips': '多媒体剪辑数',
+}
+
+# WPS 在保存/云端同步时写入的自定义属性：ICV 是云文档指纹（GUID）、
+# KSOProductBuildVer 是 WPS 版本号，值本身不含任何 AI 关键词，需按属性名识别
+WPS_CUSTOM_PROPS = {'ICV', 'KSOProductBuildVer'}
 
 # 列表展示顺序
 FIELD_ORDER = [
@@ -110,6 +129,9 @@ PDF_ORDER = ['Title', 'Author', 'Subject', 'Keywords', 'Creator',
 OOXML_EXTS = {'.docx', '.docm', '.xlsx', '.xlsm', '.pptx', '.pptm', '.ppsx', '.ppsm'}
 PDF_EXTS = {'.pdf'}
 SUPPORTED_EXTS = OOXML_EXTS | PDF_EXTS
+# PowerPoint 默认随文件保存缩略图；Word/Excel 默认不保存，出现即多为生成库模板残留
+PPTX_EXTS = {'.pptx', '.pptm', '.ppsx', '.ppsm'}
+OOXML_NO_PPT_EXTS = OOXML_EXTS - PPTX_EXTS
 
 
 def is_lock_file(path):
@@ -141,6 +163,8 @@ _AI_VALUE_PATTERN = re.compile(
     + _L + r"glm" + _R + r"|sparkdesk|"
     r"python-docx|python-pptx|openpyxl|xlsxwriter|reportlab|"
     + _L + r"fpdf" + _R + r"|weasyprint|pandoc|apache\s+poi|skia/?pdf|"
+    r"libre\s*office|open\s*office|wkhtmltopdf|matplotlib|playwright|puppeteer|"
+    + _L + r"(?:latex|luatex|pdftex|xetex|miktex|typst)" + _R + r"|"
     r"notion\.so|gamma\.app|beautiful\.ai|tome\.app|wps\s*ai" + _R + r"|"
     + _L + r"aigc" + _R + r"|ai[-\s]?generated|written\s+by\s+(?:ai|chatgpt|gpt)"
     r"|由\s*ai\s*生成|ai\s*生成",
@@ -164,12 +188,16 @@ def is_identity_field(key):
 
 
 def is_auto_checkable(key):
-    """自动勾选白名单：身份字段 + 时间/统计类规则字段 + PDF 内嵌元数据包。
+    """自动勾选白名单：身份字段 + 时间/统计类规则字段 + PDF 内嵌元数据包 +
+    OOXML 缩略图 + 统计字段（只在矛盾规则命中时才会进 suspects）。
 
     标题、关键词等正文类字段即便命中关键词也只标红提示，避免误删。
     """
-    return is_identity_field(key) or key in ('created', 'modified', 'TotalTime',
-                                             XMP_KEY, PAGEMETA_KEY)
+    return (is_identity_field(key)
+            or key in ('created', 'modified', 'revision', 'TotalTime',
+                       'pdf:CreationDate', 'pdf:ModDate',
+                       XMP_KEY, PAGEMETA_KEY, THUMB_KEY)
+            or key in APP_STAT_KEYS)
 
 
 def looks_like_ai(value, strict=False):
@@ -282,9 +310,38 @@ def _elem_text(elem):
     return ''.join(elem.itertext()).strip()
 
 
+def _flag_stale_dates(props, suspects, path, date_keys):
+    """文档内部时间与文件系统时间的矛盾。
+
+    * created/modified 比文件的修改时间早一年以上：生成库模板的冻结日期
+      残留（python-docx 模板把日期冻在 2013 年）。两个时间都偏旧（或
+      modified 缺失）才判——只有 created 偏旧是"多年前的旧稿仍在维护"
+      的正常形态，不标红。
+    * 时间晚于当前时间：异常的未来时间。
+    """
+    try:
+        mtime = datetime.fromtimestamp(os.path.getmtime(path), tz=timezone.utc)
+    except (OSError, OverflowError, ValueError):
+        return
+    parsed = {}
+    for k in date_keys:
+        dt = _parse_dt(props.get(k) or '')
+        if dt is not None:
+            parsed[k] = dt
+    if not parsed:
+        return
+    created_key, modified_key = date_keys[0], date_keys[1]
+    stale = {k for k, dt in parsed.items() if dt < mtime - timedelta(days=365)}
+    if created_key in stale and (modified_key not in parsed or modified_key in stale):
+        suspects.update(stale)
+    suspects.update(k for k, dt in parsed.items()
+                    if dt > datetime.now(timezone.utc) + timedelta(days=1))
+
+
 def read_ooxml_props(path):
     """返回 (props: {key: 值}, suspects: {key, ...})，key 见 CORE/APP/custom 规则。"""
     props, suspects = {}, set()
+    body_text = ''
     with zipfile.ZipFile(path) as z:
         names = set(z.namelist())
         if 'docProps/core.xml' in names:
@@ -305,6 +362,18 @@ def read_ooxml_props(path):
                 cname = child.get('name')
                 if cname:
                     props['custom:' + cname] = _elem_text(child)
+        # 缩略图：整体作为一个"字段"暴露，供勾选清除（部件 + 关系 + 登记）
+        thumb_parts = sorted(n for n in names if n.lower().startswith(THUMB_PREFIX))
+        if thumb_parts:
+            props[THUMB_KEY] = '存在（%s）' % thumb_parts[0]
+        # 主文档故事的可见文本（含表格），用于"统计字段为 0"矛盾判断
+        if 'word/document.xml' in names:
+            try:
+                root = ET.fromstring(z.read('word/document.xml'))
+                body_text = ''.join(e.text for e in root.iter()
+                                    if _local(e.tag) == 't' and e.text)
+            except ET.ParseError:
+                body_text = ''
 
     # 规则化判断疑似痕迹
     for key, val in props.items():
@@ -316,6 +385,29 @@ def read_ooxml_props(path):
     # 总编辑时间为 0 分钟
     if props.get('TotalTime') in ('0', '0分钟'):
         suspects.add('TotalTime')
+    # 正文有字而统计字段为 0：Office 保存时会自动重算，脚本生成的文档
+    # 保留模板默认值（python-docx 模板 Words=0），属性面板里一眼可见
+    if body_text:
+        for key in APP_STAT_KEYS:
+            if props.get(key) == '0':
+                suspects.add(key)
+    # 模板残留的 "Microsoft Macintosh Word"：在 Windows 上提交 Mac 版 Word 的痕迹
+    if 'macintosh' in (props.get('Application') or '').lower():
+        suspects.add('Application')
+    # AppVersion 不是 Office 的 NN.NNNN 样式（openpyxl 的 3.1 等脚本库版本号）
+    if props.get('AppVersion') and not re.fullmatch(r'\d{2}\.\d{4}', props['AppVersion']):
+        suspects.add('AppVersion')
+    # 修订号 1 且编辑时间 0：一次性写出、从未再次保存
+    if props.get('revision') == '1' and props.get('TotalTime') == '0':
+        suspects.add('revision')
+    # WPS 云文档指纹与版本键：值是 GUID/版本号，关键词匹配打不中，按属性名识别
+    suspects.update('custom:' + cname for cname in WPS_CUSTOM_PROPS
+                    if props.get('custom:' + cname))
+    # Word/Excel 文档不该有缩略图（PowerPoint 默认有，不判）
+    if THUMB_KEY in props and os.path.splitext(path)[1].lower() in OOXML_NO_PPT_EXTS:
+        suspects.add(THUMB_KEY)
+    # 模板冻结日期 / 未来时间（created 与 modified 一起看，避免误伤旧稿）
+    _flag_stale_dates(props, suspects, path, ('created', 'modified'))
     return props, suspects
 
 
@@ -483,6 +575,33 @@ def _rewrite_part(xml_bytes, wanted, part_ops, part):
     return _serialize(root, xml_bytes, extra_ns), removed, edited
 
 
+def _remove_thumbnail_refs(ct_bytes, rels_bytes):
+    """从 [Content_Types].xml 与 _rels/.rels 里摘除缩略图的登记项。
+
+    返回 (新 ct, 新 rels, 是否确实存在缩略图登记)。
+    """
+    found = False
+    if ct_bytes is not None:
+        root = ET.fromstring(ct_bytes)
+        drop = [c for c in root
+                if (c.get('PartName') or '').lower().startswith('/' + THUMB_PREFIX)]
+        if drop:
+            found = True
+            for c in drop:
+                root.remove(c)
+            ct_bytes = _serialize(root, ct_bytes)
+    if rels_bytes is not None:
+        root = ET.fromstring(rels_bytes)
+        drop = [c for c in root
+                if (c.get('Type') or '').lower().endswith(THUMB_REL_SUFFIX)]
+        if drop:
+            found = True
+            for c in drop:
+                root.remove(c)
+            rels_bytes = _serialize(root, rels_bytes)
+    return ct_bytes, rels_bytes, found
+
+
 def clean_ooxml(src, dst, delete_keys, set_ops):
     """改写 OOXML 包：删除 delete_keys 字段并把 set_ops 字段设为新值。
 
@@ -495,8 +614,27 @@ def clean_ooxml(src, dst, delete_keys, set_ops):
     app_ops = {k: v for k, v in set_ops.items() if k in APP_FIELDS}
     custom_ops = {k: v for k, v in set_ops.items() if k.startswith('custom:')}
     removed, edited = [], []
+    drop_thumb = THUMB_KEY in wanted
+    thumb_present = False
+
+    # 包内 entry 时间戳：Word 随编辑过程渐进保存，时间戳是分布开的；
+    # python-docx/openpyxl 等脚本一次性写出，所有 entry 时间完全相同，
+    # 是一眼可辨的指纹。呈脚本特征（全部相同，或出现 2000 年前/未来年份）
+    # 时统一归一化为文件的修改时间，原本就正常的包保持原样。
+    try:
+        pkg_time = datetime.fromtimestamp(os.path.getmtime(src)).timetuple()[:6]
+        if pkg_time[0] < 1980:      # DOS 时间戳下限，异常时钟兜底
+            pkg_time = None
+    except (OSError, OverflowError, ValueError):
+        pkg_time = None
     with zipfile.ZipFile(src) as zin:
         names = {n.replace('\\', '/') for n in zin.namelist()}
+        infolist = zin.infolist()
+        times = {i.date_time for i in infolist}
+        normalize_times = (
+            pkg_time is not None and bool(infolist)
+            and (len(times) == 1
+                 or any(t[0] < 2000 or t[0] > datetime.now().year + 1 for t in times)))
 
         # 部件缺失但有待写入字段时新建（包结构不完整则放弃，如实报告）
         new_parts = []   # (部件名, 数据, ContentType, 关系Type, 涉及的 key)
@@ -516,12 +654,19 @@ def clean_ooxml(src, dst, delete_keys, set_ops):
             ct_bytes, rels_bytes = _register_part(ct_bytes, rels_bytes,
                                                   part_name, ctype, rtype)
             edited.extend(keys)
+        thumb_present = drop_thumb and any(
+            n.lower().startswith(THUMB_PREFIX) for n in names)
+        if thumb_present:
+            # 缩略图部件连同关系/登记一起摘除，避免悬空引用导致打开报"损坏"
+            ct_bytes, rels_bytes, _found = _remove_thumbnail_refs(ct_bytes, rels_bytes)
 
         with zipfile.ZipFile(dst, 'w') as zout:
             zout.comment = zin.comment
-            for info in zin.infolist():
-                data = zin.read(info.filename)
+            for info in infolist:
                 fname = info.filename.replace('\\', '/')
+                if thumb_present and fname.lower().startswith(THUMB_PREFIX):
+                    continue    # 缩略图部件整体剔除
+                data = zin.read(info.filename)
                 rm, ed = [], []
                 if fname == '[Content_Types].xml' and ct_bytes is not None:
                     data = ct_bytes
@@ -535,15 +680,18 @@ def clean_ooxml(src, dst, delete_keys, set_ops):
                     data, rm, ed = _rewrite_part(data, wanted, custom_ops, 'custom')
                 removed.extend(rm)
                 edited.extend(ed)
-                zi = zipfile.ZipInfo(fname, date_time=info.date_time)
+                zi = zipfile.ZipInfo(fname, date_time=(pkg_time if normalize_times
+                                                       else info.date_time))
                 zi.compress_type = info.compress_type
                 zi.external_attr = info.external_attr
                 zi.comment = info.comment
                 zout.writestr(zi, data)
             for part_name, data, _ct, _rt, _keys in new_parts:
-                zi = zipfile.ZipInfo(part_name, date_time=(1980, 1, 1, 0, 0, 0))
+                zi = zipfile.ZipInfo(part_name, date_time=pkg_time or (1980, 1, 1, 0, 0, 0))
                 zi.compress_type = zipfile.ZIP_DEFLATED
                 zout.writestr(zi, data)
+    if thumb_present:
+        removed.append(THUMB_KEY)
     return removed, edited
 
 
@@ -596,6 +744,13 @@ def read_pdf_props(path):
     for key, val in props.items():
         if looks_like_ai(val, strict=is_identity_field(key)):
             suspects.add(key)
+    # 脚本库缺省值指纹：reportlab 等生成库不做设置时留下的占位值
+    for key, val in (('pdf:Author', 'anonymous'), ('pdf:Creator', 'anonymous'),
+                     ('pdf:Title', 'untitled')):
+        if (props.get(key) or '').strip().lower() == val:
+            suspects.add(key)
+    # 模板冻结日期 / 未来时间（与 OOXML 同一套规则）
+    _flag_stale_dates(props, suspects, path, ('pdf:CreationDate', 'pdf:ModDate'))
     try:
         xmp = reader.xmp_metadata
         if xmp is not None and looks_like_ai(xmp.stream.get_data().decode('utf-8', 'replace')):
@@ -820,12 +975,17 @@ def field_display_name(key):
         return PAGEMETA_NAME
     if key == XMP_KEY:
         return XMP_NAME
+    if key == THUMB_KEY:
+        return THUMB_NAME
     if key.startswith('pdf:'):
         return 'PDF ' + PDF_FIELDS.get(key[4:], key[4:])
     if key.startswith('custom:'):
         return '自定义属性：' + key[7:]
     if key.startswith('core:') or key.startswith('app:'):
-        return key.split(':', 1)[1] + '（未识别字段）'
+        local = key.split(':', 1)[1]
+        if key.startswith('app:') and local in APP_STAT_NAMES:
+            return APP_STAT_NAMES[local] + '（应用统计）'
+        return local + '（未识别字段）'
     return key
 
 
@@ -837,6 +997,8 @@ def field_sort_key(key):
         return 500 + (PDF_ORDER.index(local) if local in PDF_ORDER else 50)
     if key.startswith('custom:'):
         return 700
+    if key == THUMB_KEY:
+        return 880
     if key == PAGEMETA_KEY:
         return 890
     if key == XMP_KEY:
@@ -871,6 +1033,9 @@ def collect_ops(entry, checked_keys, edits):
             continue
         if key in (XMP_KEY, PAGEMETA_KEY):
             skipped.append((key, 'XMP / 页面级元数据不支持直接编辑'))
+            continue
+        if key == THUMB_KEY:
+            skipped.append((key, '缩略图只能勾选整体清除，不支持逐项编辑'))
             continue
         if entry['kind'] == 'pdf':
             if not key.startswith('pdf:'):
@@ -1669,6 +1834,9 @@ class CleanerApp(_Base):
         key = sel[0]
         if key in (XMP_KEY, PAGEMETA_KEY):
             messagebox.showinfo('提示', 'XMP / 页面级元数据不支持逐项编辑，可勾选整体清除。')
+            return
+        if key == THUMB_KEY:
+            messagebox.showinfo('提示', '缩略图不支持逐项编辑，可勾选后整体清除。')
             return
         if key.startswith('custom:') and key not in entry['props']:
             messagebox.showinfo('提示', '该文件没有这个自定义属性，不支持新建自定义属性。')

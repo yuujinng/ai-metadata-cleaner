@@ -95,13 +95,17 @@ try:
     app.update()
     snap('② 疑似 AI 痕迹自动标红并勾选', 1800)
 
-    # ③ 复刻 on_clean 的逐文件循环，真实清理临时副本，日志逐行出现
+    # ③ 复刻 on_clean 的逐文件循环，真实清理临时副本，日志逐行出现；
+    #    与真实流程一致：进度条步进、文件列表逐个打上「已另存 ✓」状态标记
     app.start_btn.config(state='disabled')
-    snap('③ 点「开始清理」，日志逐个文件报告', 700)
+    total = len(app.files)
+    app.progress.pack(side='right', padx=(0, 10))
+    app.progress.config(maximum=max(total, 1), value=0)
+    snap('③ 点「开始清理」，进度条走起，日志逐个文件报告', 700)
     checked = [k for k, v in app.fields.items() if v['checked']]
     mode = app.save_var.get()  # 'copy' 另存副本
     ok = fail = 0
-    for f in list(app.files):
+    for i, f in enumerate(list(app.files), 1):
         name = os.path.basename(f['path'])
         _d, _s, skipped = dmc.collect_ops(f, checked, app.edits)
         for k, why in skipped:
@@ -122,15 +126,21 @@ try:
                                       for k, v in edited)))
         app.log('✓ %s → 已另存为 %s（%s）'
                 % (name, os.path.basename(dest), '；'.join(parts)), 'ok')
+        f['status'] = ('已另存 ✓', 'ok')
+        app._update_file_row(f['path'])
+        app.progress.config(value=i)
+        app.status.config(text='正在清理 %d/%d…' % (i, total))
         ok += 1
-        snap('③ 点「开始清理」，日志逐个文件报告', 550)
+        snap('③ 点「开始清理」，进度条走起，日志逐个文件报告', 550)
     app.start_btn.config(state='normal')
+    app.progress.pack_forget()
+    app.update_status()
     app.edits.clear()
     app.log('—— 完成：成功 %d 个，失败 %d 个 ——' % (ok, fail), 'ok')
 
-    # ④ 完成（不重扫，保留勾选态与干净日志的最终画面）
+    # ④ 完成（不重扫，保留绿标状态与干净日志的最终画面）
     app.update()
-    snap('④ 清理完成，文档属性已干净', 1500)
+    snap('④ 清理完成：列表标「已另存 ✓」，文档属性已干净', 1800)
 finally:
     app.destroy()
     shutil.rmtree(tmp, ignore_errors=True)

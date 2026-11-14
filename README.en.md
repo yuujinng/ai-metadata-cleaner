@@ -19,7 +19,7 @@
 
 *Drop files in → suspected AI traces get highlighted and pre-checked → clean with one click*
 
-<img src="docs/demo.gif?v=1.2" alt="Demo GIF: drop files → traces highlighted and checked → one-click cleanup with per-file log" width="720"/>
+<img src="docs/demo.gif?v=1.3" alt="Demo GIF: drop files → traces highlighted and checked → one-click cleanup with progress bar, files marked saved in the list" width="720"/>
 
 </div>
 

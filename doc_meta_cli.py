@@ -4,8 +4,14 @@
 与 doc_meta_cleaner.py（核心逻辑 + 图形界面）分离：
 本文件只做参数解析与结果展示，所有能力都复用主模块的函数，
 保证命令行与图形界面行为一致。
+
+退出码：0=全部成功；1=有文件处理失败（被占用/加密/字段不存在/值非法，
+明细见文本输出的 ⚠ 行或 JSON 的 errors/files[].error）；2=命令用法错误。
+三个子命令都支持 --json：stdout 输出单个 JSON 文档（ensure_ascii，
+任何控制台编码下都是合法 JSON），供脚本与 AI Agent 程序化解析。
 """
 import argparse
+import json
 import os
 import sys
 
@@ -74,19 +80,27 @@ def iter_files(paths):
     return files, missing, unsupported
 
 
-def _warn_paths(missing, unsupported):
-    for p in missing:
-        print('⚠ 路径不存在：%s' % p, file=sys.stderr)
-    for p in unsupported:
-        print('⚠ 不支持的格式：%s' % p, file=sys.stderr)
+def _warn_paths(missing, unsupported, json_mode=False):
+    """路径警告。JSON 模式下不打印（警告会进 JSON 文档），仍返回是否有问题。"""
+    if not json_mode:
+        for p in missing:
+            print('⚠ 路径不存在：%s' % p, file=sys.stderr)
+        for p in unsupported:
+            print('⚠ 不支持的格式：%s' % p, file=sys.stderr)
     return bool(missing or unsupported)
 
 
-def _summary(ok, total, failed):
-    print()
-    if total:
-        print('完成：%d/%d 个文档处理成功%s'
-              % (ok, total, '（部分文件失败，见上方 ⚠）' if failed else ''))
+def _emit_json(doc):
+    """JSON 输出统一入口：ensure_ascii 保证任何控制台编码下都是合法 JSON。"""
+    print(json.dumps(doc, ensure_ascii=True, indent=2))
+
+
+def _summary(ok, total, failed, json_mode=False):
+    if not json_mode:
+        print()
+        if total:
+            print('完成：%d/%d 个文档处理成功%s'
+                  % (ok, total, '（部分文件失败，见上方 ⚠）' if failed else ''))
     return 1 if failed else 0
 
 
@@ -104,18 +118,33 @@ def _print_result(name, dest, removed, edited, mode):
         print('    修改：%s = %s' % (dmc.field_display_name(k), _short(v, 36)))
 
 
-def _run_clean(name, entry, checked, edits, mode):
-    """执行清理并打印结果；单文件失败时给出警告而不中断整批。返回是否成功。"""
+def _run_clean(name, entry, checked, edits, mode, json_mode=False):
+    """执行清理；单文件失败时给出警告而不中断整批。
+
+    返回结果 dict：{name, ok, dest, changed, removed, edited, error}；
+    json_mode=True 时只收集不打印。
+    """
+    result = {'name': name, 'ok': False, 'dest': None, 'changed': False,
+              'removed': [], 'edited': [], 'error': None}
     try:
         dest, removed, edited = dmc.clean_file(entry, checked, edits, mode)
     except PermissionError:
-        print('⚠ %s：文件被占用，请先关闭正在编辑它的程序' % name, file=sys.stderr)
-        return False
+        msg = '文件被占用，请先关闭正在编辑它的程序'
+        if not json_mode:
+            print('⚠ %s：%s' % (name, msg), file=sys.stderr)
+        result['error'] = msg
+        return result
     except Exception as exc:
-        print('⚠ %s：%s' % (name, exc), file=sys.stderr)
-        return False
-    _print_result(name, dest, removed, edited, mode)
-    return True
+        if not json_mode:
+            print('⚠ %s：%s' % (name, exc), file=sys.stderr)
+        result['error'] = str(exc)
+        return result
+    result.update(ok=True, dest=dest, changed=bool(removed or edited),
+                  removed=list(removed),
+                  edited=[{'key': k, 'value': v} for k, v in edited])
+    if not json_mode:
+        _print_result(name, dest, removed, edited, mode)
+    return result
 
 
 def resolve_fields(spec, entry):
@@ -186,76 +215,120 @@ def _build_set_ops(entry, path, assigns):
 
 def cmd_scan(args):
     files, missing, unsupported = iter_files(args.paths)
-    failed = _warn_paths(missing, unsupported)
+    failed = _warn_paths(missing, unsupported, json_mode=args.json)
     ok = 0
+    out, errors = [], []
     for fp in files:
         name = os.path.basename(fp)
         try:
             entry = dmc.scan_file(fp)
         except Exception as exc:
-            print('⚠ 无法读取 %s：%s' % (name, exc), file=sys.stderr)
+            if not args.json:
+                print('⚠ 无法读取 %s：%s' % (name, exc), file=sys.stderr)
+            errors.append({'path': fp, 'error': str(exc)})
             failed = True
             continue
         props = entry['props']
-        suspects = set(entry['suspects'])
-        print('%s （%s，%d 项属性，%d 项疑似 AI 痕迹）'
-              % (name, _kind_name(entry['kind']), len(props), len(suspects)))
-        if props:
-            width = max(_width(dmc.field_display_name(k)) for k in props)
-            for k in _sorted_keys(props):
-                mark = '   ← 疑似 AI 痕迹' if k in suspects else ''
-                print('  %s  %s%s'
-                      % (_pad(dmc.field_display_name(k), width), _short(props[k]), mark))
-        else:
-            print('  （无属性）')
-        print()
+        suspects = sorted(entry['suspects'])
+        out.append({'path': fp, 'name': name, 'kind': entry['kind'],
+                    'props': props, 'suspects': suspects})
+        if not args.json:
+            print('%s （%s，%d 项属性，%d 项疑似 AI 痕迹）'
+                  % (name, _kind_name(entry['kind']), len(props), len(suspects)))
+            if props:
+                width = max(_width(dmc.field_display_name(k)) for k in props)
+                for k in _sorted_keys(props):
+                    mark = '   ← 疑似 AI 痕迹' if k in entry['suspects'] else ''
+                    print('  %s  %s%s'
+                          % (_pad(dmc.field_display_name(k), width),
+                             _short(props[k]), mark))
+            else:
+                print('  （无属性）')
+            print()
         ok += 1
-    return _summary(ok, len(files), failed)
+    if args.json:
+        _emit_json({'command': 'scan', 'files': out, 'errors': errors,
+                    'missing': missing, 'unsupported': unsupported,
+                    'summary': {'total': len(files), 'ok': ok,
+                                'failed': len(errors) + len(missing) + len(unsupported)}})
+    return _summary(ok, len(files), failed, json_mode=args.json)
 
 
 def cmd_clean(args):
     files, missing, unsupported = iter_files(args.paths)
-    failed = _warn_paths(missing, unsupported)
+    failed = _warn_paths(missing, unsupported, json_mode=args.json)
     ok = 0
+    out, errors = [], []
     for fp in files:
         name = os.path.basename(fp)
         try:
             entry = dmc.scan_file(fp)
             checked = resolve_fields(args.fields, entry)
         except Exception as exc:
-            print('⚠ 跳过 %s：%s' % (name, exc), file=sys.stderr)
+            if not args.json:
+                print('⚠ 跳过 %s：%s' % (name, exc), file=sys.stderr)
+            errors.append({'path': fp, 'error': str(exc)})
             failed = True
             continue
-        if _run_clean(name, entry, checked, {}, args.mode):
+        result = _run_clean(name, entry, checked, {}, args.mode,
+                            json_mode=args.json)
+        if result['ok']:
             ok += 1
         else:
             failed = True
-    return _summary(ok, len(files), failed)
+        result['path'] = fp
+        out.append(result)
+    if args.json:
+        _emit_json({'command': 'clean', 'mode': args.mode, 'files': out,
+                    'errors': errors, 'missing': missing,
+                    'unsupported': unsupported,
+                    'summary': {'total': len(files), 'ok': ok,
+                                'failed': len(errors) + len(missing)
+                                + len(unsupported) + sum(1 for r in out if not r['ok'])}})
+    return _summary(ok, len(files), failed, json_mode=args.json)
 
 
 def cmd_set(args):
     try:
         assigns = _parse_assigns(args.assigns)
     except ValueError as exc:
-        print('⚠ %s' % exc, file=sys.stderr)
+        if args.json:
+            _emit_json({'command': 'set', 'error': str(exc),
+                        'summary': {'total': 0, 'ok': 0, 'failed': 0}})
+        else:
+            print('⚠ %s' % exc, file=sys.stderr)
         return 2
     files, missing, unsupported = iter_files(args.paths)
-    failed = _warn_paths(missing, unsupported)
+    failed = _warn_paths(missing, unsupported, json_mode=args.json)
     ok = 0
+    out, errors = [], []
     for fp in files:
         name = os.path.basename(fp)
         try:
             entry = dmc.scan_file(fp)
             checked, edits = _build_set_ops(entry, fp, assigns)
         except Exception as exc:
-            print('⚠ 跳过 %s：%s' % (name, exc), file=sys.stderr)
+            if not args.json:
+                print('⚠ 跳过 %s：%s' % (name, exc), file=sys.stderr)
+            errors.append({'path': fp, 'error': str(exc)})
             failed = True
             continue
-        if _run_clean(name, entry, checked, edits, args.mode):
+        result = _run_clean(name, entry, checked, edits, args.mode,
+                            json_mode=args.json)
+        if result['ok']:
             ok += 1
         else:
             failed = True
-    return _summary(ok, len(files), failed)
+        result['path'] = fp
+        out.append(result)
+    if args.json:
+        _emit_json({'command': 'set', 'mode': args.mode, 'files': out,
+                    'errors': errors, 'missing': missing,
+                    'unsupported': unsupported,
+                    'summary': {'total': len(files), 'ok': ok,
+                                'failed': len(errors) + len(missing)
+                                + len(unsupported) + sum(1 for r in out if not r['ok'])}})
+    return _summary(ok, len(files), failed, json_mode=args.json)
 
 
 def _parse_assigns(assign_pairs):
@@ -298,8 +371,14 @@ def build_parser():
                         help='列出全部可操作的字段后退出')
     sub = parser.add_subparsers(dest='command', metavar='{scan,clean,set}')
 
+    def _add_json(p):
+        p.add_argument('--json', action='store_true',
+                       help='结果以 JSON 输出到 stdout，供脚本/Agent 程序化解析'
+                            '（退出码 0=全部成功，1=有文件失败，2=用法错误）')
+
     p_scan = sub.add_parser('scan', help='列出文档属性，标出疑似 AI 痕迹')
     p_scan.add_argument('paths', nargs='+', metavar='文件或目录')
+    _add_json(p_scan)
 
     p_clean = sub.add_parser('clean', help='清除属性（默认清除疑似 AI 痕迹）')
     p_clean.add_argument('paths', nargs='+', metavar='文件或目录')
@@ -308,12 +387,14 @@ def build_parser():
     p_clean.add_argument('--fields', default='auto',
                          help='auto=仅疑似 AI 痕迹（默认）；all=全部属性；'
                               '或逗号分隔的字段 key/名称')
+    _add_json(p_clean)
 
     p_set = sub.add_parser('set', help='修改属性：字段=值（值留空表示清除）')
     p_set.add_argument('paths', nargs='+', metavar='文件或目录')
     p_set.add_argument('assigns', nargs='+', metavar='字段=值')
     p_set.add_argument('--mode', choices=('copy', 'overwrite'), default='copy',
                        help='copy=另存副本（默认），overwrite=覆盖原文件')
+    _add_json(p_set)
     return parser
 
 

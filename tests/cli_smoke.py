@@ -118,6 +118,58 @@ check('文件被占用时友好报错（exit 1，无 traceback）',
 r = run('clean', doc, '--fields', 'all', '--mode', 'overwrite')
 check('占用解除后可正常清理', r.returncode == 0, (r.returncode, r.stdout[:200], r.stderr[:300]))
 
+# ---- JSON 模式（Agent/脚本程序化解析）：用全新副本，不影响前面断言 ----
+import json as _json
+
+work3 = os.path.join(OUT, 'cli_json')
+shutil.rmtree(work3, ignore_errors=True)
+os.makedirs(work3)
+jdoc = shutil.copy(sample, os.path.join(work3, 'json.docx'))
+
+r = run('scan', jdoc, '--json')
+check('scan --json 可解析且 exit 0', r.returncode == 0, (r.returncode, r.stderr[:200]))
+data = _json.loads(r.stdout)
+check('scan --json 结构与内容',
+      data['command'] == 'scan'
+      and data['files'][0]['props'].get('creator') == 'ChatGPT (OpenAI)'
+      and 'creator' in data['files'][0]['suspects']
+      and data['summary'] == {'total': 1, 'ok': 1, 'failed': 0},
+      data['summary'])
+
+r = run('clean', jdoc, '--json', '--mode', 'overwrite')
+check('clean --json 成功且 exit 0', r.returncode == 0, (r.returncode, r.stderr[:200]))
+data = _json.loads(r.stdout)
+f0 = data['files'][0]
+check('clean --json 结果字段',
+      f0['ok'] is True and f0['changed'] is True and f0['dest'] == jdoc
+      and 'creator' in f0['removed'] and f0['error'] is None
+      and data['summary']['ok'] == 1, f0)
+
+r = run('set', jdoc, 'created=明天下午', '--json', '--mode', 'overwrite')
+check('set --json 文件失败（exit 1）', r.returncode == 1, (r.returncode,))
+data = _json.loads(r.stdout)
+check('set --json 失败明细在 errors',
+      data['summary']['failed'] == 1 and '无效' in data['errors'][0]['error'],
+      data['errors'])
+
+r = run('set', jdoc, 'invalid-syntax', '--json')
+check('set --json 用法错误（exit 2）', r.returncode == 2, (r.returncode, r.stdout[:200]))
+data = _json.loads(r.stdout)
+check('set --json 用法错误结构', data['command'] == 'set' and 'error' in data, data)
+
+r = run('scan', os.path.join(work3, '不存在.docx'), '--json')
+check('scan --json 缺失路径（exit 1）', r.returncode == 1, (r.returncode,))
+data = _json.loads(r.stdout)
+check('scan --json missing 列表',
+      data['missing'] == [os.path.join(work3, '不存在.docx')]
+      and data['files'] == [] and data['summary']['failed'] == 1, data.get('missing'))
+
+r = run('clean', jdoc, '--json', '--fields', '不存在的字段')
+check('clean --json 字段解析失败进 errors（exit 1）', r.returncode == 1, (r.returncode,))
+data = _json.loads(r.stdout)
+check('clean --json errors 结构', data['files'] == []
+      and '可用' in data['errors'][0]['error'], data['errors'])
+
 print()
 if FAILURES:
     print('FAILED:', len(FAILURES), FAILURES)

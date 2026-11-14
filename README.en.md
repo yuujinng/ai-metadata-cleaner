@@ -33,7 +33,7 @@
 - ✏️ **Free editing** — set any property to any value; "apply to all files" batch-unifies a whole batch; dates are converted to the standard document format automatically
 - 🖱️ **Drag & drop** — drop files or entire folders (recursively scanned) straight into the window
 - ⚡ **Background processing** — scanning and cleaning run on a background thread with a progress bar, so even folder-sized batches keep the UI responsive; results are marked in the file list (hover for the full path) and your save-mode / auto-check / window preferences are remembered
-- 🖥️ **Command-line mode** — `scan` / `clean` / `set` subcommands for batch processing and scripting, sharing the same core logic as the GUI
+- 🖥️ **Command-line mode** — `scan` / `clean` / `set` subcommands for batch processing and scripting, sharing the same core logic as the GUI; `--json` output + semantic exit codes make it easy to drive from scripts and AI agents
 - 🔒 **Zero damage to content** — only property parts are rewritten; the rest of the document is preserved byte-for-byte; overwrite mode writes to a temp file first and replaces atomically, so failures never harm the original
 - 🕐 **Leaves no processing traces** — cleaning does not touch the file's system timestamps (overwrite mode even restores the Windows creation time; copies keep the original's modification time)
 - 📦 **Zero setup** — download a single exe from [Releases](../../releases) and run it: no Python, no network needed; running from source is also supported
@@ -121,8 +121,61 @@ python doc_meta_cli.py clean document.docx --fields creator,创建时间   # pic
 python doc_meta_cli.py set report.docx creator=ZhangSan
 python doc_meta_cli.py set report.docx created="2026-10-20 10:00:05" --mode overwrite
 
+# JSON output: a single JSON document on stdout, for scripts and AI agents
+python doc_meta_cli.py scan paper.docx --json
+
 python doc_meta_cli.py --list-fields    # list all operable fields
 ```
+
+Exit codes: **0** all succeeded; **1** at least one file failed (in use / encrypted / unknown field / invalid value — details in the ⚠ lines or the JSON `errors`); **2** the command itself is wrong.
+
+## 🤖 Working with AI agents
+
+The tool's signature scenario is "students have an agent generate the homework" — so the smoothest usage is not dragging files into the GUI yourself, but **making cleanup a finishing rule the agent runs right after generating**. Paste the block below together with your generation request into any terminal-capable agent (Claude Code / Codex CLI / ZCode, etc.):
+
+```text
+[Cleanup document properties before delivery — REQUIRED]
+Before handing me any generated Word/Excel/PPT/PDF document, you must finish these steps, no skipping:
+1. If the cleaner isn't on this machine yet, clone it to a temp directory (on Windows you may use %TEMP% instead of /tmp):
+   git clone --depth 1 https://github.com/yuujinng/ai-metadata-cleaner.git /tmp/ai-metadata-cleaner
+2. For every generated .docx/.xlsx/.pptx/.pdf file, run (overwrite mode, cleans in place):
+   python /tmp/ai-metadata-cleaner/doc_meta_cli.py clean "document path" --mode overwrite
+3. Re-scan every file afterwards to confirm no "suspected AI traces" remain:
+   python /tmp/ai-metadata-cleaner/doc_meta_cli.py scan "document path"
+4. Both commands must exit 0 to count as done; if not, report the actual error to me honestly. Never fake success.
+5. Clean document properties only (author / application / time statistics); never touch the body text.
+```
+
+**Programmatic interface** (for agents/scripts that parse results themselves): all three subcommands accept `--json` and print a single JSON document to stdout; Chinese values are `\uXXXX`-escaped so it stays valid JSON under any console encoding:
+
+```bash
+python doc_meta_cli.py scan paper.docx --json
+```
+
+```json
+{
+  "command": "scan",
+  "files": [
+    { "path": "paper.docx", "kind": "ooxml",
+      "props": { "creator": "python-docx", "TotalTime": "0" },
+      "suspects": ["creator", "created", "modified", "TotalTime"] }
+  ],
+  "errors": [],
+  "missing": [],
+  "unsupported": [],
+  "summary": { "total": 1, "ok": 1, "failed": 0 }
+}
+```
+
+For `clean` / `set`, each file in the JSON carries `ok`, `changed`, `dest` (output path), `removed` (cleared fields), `edited` (edited fields with new values) and `error` (per-file failure reason).
+
+| Exit code | Meaning | What an agent should do |
+| :---: | --- | --- |
+| 0 | All succeeded | Proceed with delivery |
+| 1 | At least one file failed (in use / encrypted / unknown field / invalid value) — see `errors` and `files[].error` | Read the details, fix, then retry |
+| 2 | The command itself is wrong (missing args, bad assignment format) | Fix the command; don't retry as-is |
+
+> 💡 For batch jobs pass a directory (expanded recursively): `clean D:\homework\`. To unify the author across a batch, use `set`: `python doc_meta_cli.py set D:\homework\ creator=ZhangSan --mode overwrite`.
 
 ## 📂 Supported formats
 

@@ -33,7 +33,7 @@
 - ✏️ **随意修改** — 任意属性改成任意值，支持"应用到所有文件"批量统一，日期自动转成文档标准格式
 - 🖱️ **拖拽即用** — 文件或整个文件夹（递归扫描）直接拖进窗口
 - ⚡ **后台处理不卡界面** — 扫描与清理都在后台线程进行，整目录大批量也有进度条；结果直接标记在文件列表（悬停显示完整路径），保存方式、勾选偏好与窗口大小会被记住
-- 🖥️ **命令行模式** — `scan` / `clean` / `set` 子命令，支持批量与脚本自动化，与 GUI 共用同一套核心逻辑
+- 🖥️ **命令行模式** — `scan` / `clean` / `set` 子命令，支持批量与脚本自动化，与 GUI 共用同一套核心逻辑；`--json` 输出 + 语义化退出码，方便脚本与 AI Agent 程序化调用
 - 🔒 **正文零损伤** — 只改写属性部件，文档内容逐字节保留；覆盖模式先写临时文件再原子替换，失败不伤原文件
 - 🕐 **不留处理痕迹** — 清理不改动文件的系统时间戳（覆盖模式连 Windows 创建时间一并保留，副本沿用原文件修改时间）
 - 📦 **零安装门槛** — 从 [Releases](../../releases) 下载单个 exe 双击即用，无需安装 Python、无需联网；也提供源码运行方式
@@ -121,8 +121,61 @@ python doc_meta_cli.py clean 文档.docx --fields creator,创建时间       # �
 python doc_meta_cli.py set 报告.docx creator=张三
 python doc_meta_cli.py set 报告.docx created="2026-10-20 10:00:05" --mode overwrite
 
+# JSON 输出：结果以单个 JSON 文档打印到 stdout，供脚本/Agent 程序化解析
+python doc_meta_cli.py scan 作业.docx --json
+
 python doc_meta_cli.py --list-fields    # 查看全部可操作的字段
 ```
+
+退出码：**0** 全部成功；**1** 有文件处理失败（被占用 / 加密 / 字段不存在 / 值非法，明细见 ⚠ 行或 JSON 的 `errors`）；**2** 命令用法错误。
+
+## 🤖 与 AI Agent 配合使用
+
+这个工具的典型场景，就是"学生让 agent 生成作业"——所以最顺滑的用法不是生成完自己再拖进界面，而是**把清理写成 agent 的收尾规则，让它生成完自己调命令行**。把下面这段直接连同你的生成需求一起粘给任何带终端的 agent（Claude Code / Codex CLI / ZCode 等）：
+
+```text
+【交付前清理文档属性 —— 必须执行】
+你生成的 Word/Excel/PPT/PDF 文档在交付给我之前，必须完成以下收尾步骤，不可跳过：
+1. 如果本机还没有清理工具，先克隆到临时目录（Windows 下可用 %TEMP% 代替 /tmp）：
+   git clone --depth 1 https://github.com/yuujinng/ai-metadata-cleaner.git /tmp/ai-metadata-cleaner
+2. 对每个生成的 .docx/.xlsx/.pptx/.pdf 文件执行（覆盖模式，直接在原文件上清理）：
+   python /tmp/ai-metadata-cleaner/doc_meta_cli.py clean "文档路径" --mode overwrite
+3. 清理后逐个复查，确认没有"疑似 AI 痕迹"：
+   python /tmp/ai-metadata-cleaner/doc_meta_cli.py scan "文档路径"
+4. 两条命令的退出码都是 0 才算完成；非 0 时把错误信息如实告诉我，不要假装成功。
+5. 只清理文档属性（作者/程序/时间统计等），不要改动正文内容。
+```
+
+**程序化接口**（给需要自己解析结果的 agent/脚本）：三个子命令都支持 `--json`，stdout 输出单个 JSON 文档，中文值以 `\uXXXX` 转义保证任何终端编码下都是合法 JSON：
+
+```bash
+python doc_meta_cli.py scan 作业.docx --json
+```
+
+```json
+{
+  "command": "scan",
+  "files": [
+    { "path": "作业.docx", "kind": "ooxml",
+      "props": { "creator": "python-docx", "TotalTime": "0" },
+      "suspects": ["creator", "created", "modified", "TotalTime"] }
+  ],
+  "errors": [],
+  "missing": [],
+  "unsupported": [],
+  "summary": { "total": 1, "ok": 1, "failed": 0 }
+}
+```
+
+`clean` / `set` 的 JSON 里每个文件返回 `ok`、`changed`、`dest`（输出路径）、`removed`（清除的字段）、`edited`（修改的字段与新值）、`error`（单文件失败原因）。
+
+| 退出码 | 含义 | agent 应对 |
+| :---: | --- | --- |
+| 0 | 全部成功 | 继续交付 |
+| 1 | 有文件处理失败（被占用 / 加密 / 字段不存在 / 值非法），`errors` 与 `files[].error` 有明细 | 读明细，处理后重试 |
+| 2 | 命令本身写错（参数缺失、赋值格式不对） | 修正命令，不要原样重试 |
+
+> 💡 批量场景直接传目录（递归展开）：`clean D:\作业\`。想给整批文档统一作者，用 `set`：`python doc_meta_cli.py set D:\作业\ creator=张三 --mode overwrite`。
 
 ## 📂 支持的格式
 

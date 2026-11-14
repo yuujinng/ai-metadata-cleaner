@@ -91,6 +91,7 @@ try:
 
     # ② 拖入后：疑似 AI 痕迹标红并自动勾选
     app.on_drop(types.SimpleNamespace(data='{%s}' % '} {'.join(paths)))
+    app.wait_for_idle()  # 扫描在后台线程进行，等完成后再截「拖入后」帧
     app.update()
     snap('② 疑似 AI 痕迹自动标红并勾选', 1800)
 

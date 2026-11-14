@@ -20,15 +20,25 @@
     元数据同样支持检测与清除。
 """
 
+import json
 import os
+import queue
 import re
 import sys
+import threading
+import time
+import traceback
 import zipfile
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
 import tkinter as tk
 from tkinter import ttk
+
+try:
+    from version import __version__
+except ImportError:  # 单独拷贝本文件时兜底，正常随仓库分发不会走到
+    __version__ = 'dev'
 
 # 拖拽放入文件支持（可选依赖，缺失时程序其余功能不受影响）
 try:
@@ -977,6 +987,57 @@ def clean_file(entry, checked_keys, edits, mode):
 
 
 # ---------------------------------------------------------------------------
+# 用户设置 / 崩溃日志（%APPDATA%/AIMetadataCleaner）
+# ---------------------------------------------------------------------------
+
+_GEOMETRY_RE = re.compile(r'^\d+x\d+(?:[+-]\d+){2}$')
+
+
+def _settings_dir():
+    """设置与崩溃日志的存放目录：优先 %APPDATA%，其余平台退 ~/.config。"""
+    base = os.environ.get('APPDATA') or os.path.join(os.path.expanduser('~'), '.config')
+    return os.path.join(base, 'AIMetadataCleaner')
+
+
+def load_settings():
+    """读取用户设置；文件缺失或损坏时返回空 dict（调用方用默认值兜底）。"""
+    try:
+        with open(os.path.join(_settings_dir(), 'settings.json'), encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_settings(data):
+    """保存用户设置（临时文件 + 原子替换）；失败静默，设置丢失不影响主功能。"""
+    try:
+        d = _settings_dir()
+        os.makedirs(d, exist_ok=True)
+        tmp = os.path.join(d, 'settings.json.tmp')
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, os.path.join(d, 'settings.json'))
+    except OSError:
+        pass
+
+
+def write_crash_log(exc, val, tb):
+    """把未捕获异常追加写入 crash.log，返回日志路径；失败返回 None。"""
+    try:
+        d = _settings_dir()
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, 'crash.log')
+        with open(path, 'a', encoding='utf-8', errors='replace') as f:
+            f.write('\n[%s] %s: %s\n' % (datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                         exc.__name__, val))
+            f.write(''.join(traceback.format_exception(exc, val, tb)))
+        return path
+    except OSError:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # GUI
 # ---------------------------------------------------------------------------
 
@@ -986,17 +1047,37 @@ _Base = TkinterDnD.Tk if TkinterDnD else tk.Tk
 class CleanerApp(_Base):
     def __init__(self):
         super().__init__()
-        self.title('文档AI属性清理工具')
+        self.title('文档AI属性清理工具 v' + __version__)
         self.geometry('1080x680')
         self.minsize(880, 560)
 
-        self.files = []          # [ {path, kind, props, suspects} ]
+        settings = load_settings()
+
+        self.files = []          # [ {path, kind, props, suspects, status} ]
         self.fields = {}         # key -> {name, suspect, checked}
         self.edits = {}          # key -> {'value', 'all', 'path'}（待应用的修改）
         self.current_path = None
 
+        # 后台任务状态：worker 线程只做 IO，控件操作全部经队列回到主线程
+        self._queue = queue.Queue()
+        self._busy = False
+        self._job = None            # 'scan' | 'clean' | 'rescan'
+        self._pending_paths = []    # 任务进行中拖入的路径，结束后自动接续
+        self._stop_event = threading.Event()
+        self._tip = None            # 文件路径悬浮提示
+        self._last_crash_dialog = 0.0
+
         self._build_style()
         self._build_ui()
+        self._apply_saved_prefs(settings)
+        # 窗口几何要在 UI 构建完成后恢复：提前设置会被随后打包控件的
+        # 布局重算覆盖（位置保留、尺寸回到内容请求值）
+        geom = settings.get('geometry')
+        if isinstance(geom, str) and _GEOMETRY_RE.match(geom):
+            self.geometry(geom)
+        self._start_pump()
+        self.protocol('WM_DELETE_WINDOW', self._on_close)
+
         self.log('提示：清理前请先关闭正在 Word/WPS 中编辑的文档，否则文件被占用会失败。')
         self.log('步骤：1) 添加或拖入文件 → 2) 在右侧勾选要清除的属性 → '
                  '3) 选择保存方式 → 4) 开始清理。')
@@ -1028,8 +1109,10 @@ class CleanerApp(_Base):
         bar.pack(fill='x')
         ttk.Button(bar, text='添加文件…', command=self.add_files).pack(side='left')
         ttk.Button(bar, text='添加文件夹…', command=self.add_folder).pack(side='left', padx=(6, 0))
-        ttk.Button(bar, text='移除所选文件', command=self.remove_selected).pack(side='left', padx=(6, 0))
-        ttk.Button(bar, text='清空列表', command=self.clear_files).pack(side='left', padx=(6, 0))
+        self.remove_btn = ttk.Button(bar, text='移除所选文件', command=self.remove_selected)
+        self.remove_btn.pack(side='left', padx=(6, 0))
+        self.clear_btn = ttk.Button(bar, text='清空列表', command=self.clear_files)
+        self.clear_btn.pack(side='left', padx=(6, 0))
         self.auto_check_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             bar, text='添加时自动勾选身份类痕迹（作者/程序/时间）',
@@ -1040,15 +1123,24 @@ class CleanerApp(_Base):
         body.pack(fill='both', expand=True, padx=8, pady=(0, 4))
 
         left = ttk.Frame(body)
-        ttk.Label(left, text='文件列表').pack(anchor='w')
+        ttk.Label(left, text='文件列表（悬停查看完整路径）').pack(anchor='w')
         listframe = ttk.Frame(left)
         listframe.pack(fill='both', expand=True)
-        self.file_list = tk.Listbox(listframe, selectmode='single', activestyle='dotbox')
-        lsb = ttk.Scrollbar(listframe, orient='vertical', command=self.file_list.yview)
-        self.file_list.config(yscrollcommand=lsb.set)
-        self.file_list.pack(side='left', fill='both', expand=True)
-        lsb.pack(side='right', fill='y')
-        self.file_list.bind('<<ListboxSelect>>', self.on_file_selected)
+        self.file_tree = ttk.Treeview(listframe, columns=('name', 'status'),
+                                      show='headings', selectmode='extended')
+        self.file_tree.heading('name', text='文件')
+        self.file_tree.column('name', width=170, anchor='w')
+        self.file_tree.heading('status', text='状态')
+        self.file_tree.column('status', width=80, anchor='center', stretch=False)
+        fsb = ttk.Scrollbar(listframe, orient='vertical', command=self.file_tree.yview)
+        self.file_tree.config(yscrollcommand=fsb.set)
+        self.file_tree.pack(side='left', fill='both', expand=True)
+        fsb.pack(side='right', fill='y')
+        self.file_tree.tag_configure('ok', foreground='#1a7f37')
+        self.file_tree.tag_configure('err', foreground='#c0392b')
+        self.file_tree.bind('<<TreeviewSelect>>', self.on_file_selected)
+        self.file_tree.bind('<Motion>', self._file_tooltip)
+        self.file_tree.bind('<Leave>', self._hide_tooltip)
         body.add(left, weight=1)
 
         right = ttk.Frame(body)
@@ -1099,6 +1191,7 @@ class CleanerApp(_Base):
                         variable=self.save_var, value='overwrite').pack(side='left', padx=(10, 0))
         self.start_btn = ttk.Button(bottom, text='开始清理', style='Start.TButton', command=self.on_clean)
         self.start_btn.pack(side='right')
+        self.progress = ttk.Progressbar(bottom, length=210, mode='determinate')
         self.status = ttk.Label(self, text='共 0 个文件', padding=(10, 2), foreground='#666')
         self.status.pack(anchor='w')
 
@@ -1126,10 +1219,90 @@ class CleanerApp(_Base):
         self.status.config(text='共 %d 个文件，已勾选 %d 个字段，待修改 %d 项'
                            % (len(self.files), checked, len(self.edits)))
 
+    # ---- 后台任务调度 ------------------------------------------------------
+    # worker 线程只做文件 IO（展开目录 / scan_file / clean_file），绝不碰控件；
+    # 结果经队列送回，主线程 _pump 每 80ms 取一次并分发。
+    def _start_pump(self):
+        self._pump_after = None
+        self._pump()
+
+    def _pump(self):
+        try:
+            try:
+                while True:
+                    msg = self._queue.get_nowait()
+                    try:
+                        self._dispatch(msg)
+                    except tk.TclError:
+                        return  # 窗口正在销毁，停止泵
+                    except Exception:
+                        # 单条消息处理出错不拖垮整个泵（否则后台 UI 更新会静默瘫痪）
+                        self.report_callback_exception(*sys.exc_info())
+            except queue.Empty:
+                pass
+        except tk.TclError:
+            return  # 窗口正在销毁，停止泵
+        self._pump_after = self.after(80, self._pump)
+
+    def _dispatch(self, msg):
+        kind = msg[0]
+        if kind == 'log':
+            self.log(msg[1], msg[2])
+        elif kind == 'scanned':
+            self._on_scanned(msg[1], msg[2])
+        elif kind == 'progress':
+            self._on_progress(msg[1], msg[2])
+        elif kind == 'scan_done':
+            self._on_scan_done()
+        elif kind == 'cleaned':
+            self._on_cleaned(msg[1], msg[2])
+        elif kind == 'clean_done':
+            self._on_clean_done(msg[1], msg[2], msg[3])
+        elif kind == 'rescanned':
+            self._on_rescanned(msg[1], msg[2])
+        elif kind == 'rescan_done':
+            self._on_rescan_done()
+
+    def _set_busy(self, busy, job=None):
+        self._busy = busy
+        if job is not None:
+            self._job = job
+        state = 'disabled' if busy else 'normal'
+        for btn in (self.start_btn, self.remove_btn, self.clear_btn):
+            btn.config(state=state)
+        if busy:
+            self._stop_event.clear()
+            self.progress.config(value=0)
+            self.progress.pack(side='right', padx=(0, 10))
+        else:
+            self.progress.pack_forget()
+
+    def _on_progress(self, done, total):
+        self.progress.config(maximum=max(total, 1), value=done)
+        verb = {'scan': '正在扫描', 'clean': '正在清理', 'rescan': '正在刷新'}[self._job]
+        self.status.config(text='%s %d/%d…' % (verb, done, total))
+
+    def wait_for_idle(self, timeout=60):
+        """无 mainloop 的脚本（冒烟测试 / 截图）等待后台任务全部完成。"""
+        deadline = time.time() + timeout
+        while (self._busy or not self._queue.empty()) and time.time() < deadline:
+            self.update()
+            time.sleep(0.01)
+        if self._busy or not self._queue.empty():
+            raise RuntimeError('后台任务超时未完成')
+
+    def _maybe_continue(self):
+        """当前 job 结束后：有缓冲的拖入就接着扫描（返回 True），否则收尾。"""
+        if self._pending_paths:
+            pending, self._pending_paths = self._pending_paths, []
+            self._launch_scan(pending)
+            return True
+        return False
+
     # ---- 拖拽放入 ---------------------------------------------------------
     def _enable_dragdrop(self):
         # Windows 上每个 tk 子窗口都是独立的 HWND，需要分别注册为拖放目标
-        for w in (self, self.file_list, self.tree, self.log_text):
+        for w in (self, self.file_tree, self.tree, self.log_text):
             try:
                 w.drop_target_register(DND_FILES)
                 w.dnd_bind('<<Drop>>', self.on_drop)
@@ -1137,30 +1310,13 @@ class CleanerApp(_Base):
                 pass
 
     def on_drop(self, event):
-        """接收拖入的文件/文件夹，文件夹会被递归展开。"""
+        """接收拖入的文件/文件夹；目录交给后台线程递归展开。"""
         try:
             raw = self.tk.splitlist(event.data)
         except Exception:
             return 'copy'
-        files = []
-        for p in raw:
-            if os.path.isdir(p):
-                for dirpath, _dirs, fns in os.walk(p):
-                    files.extend(
-                        os.path.join(dirpath, fn) for fn in fns
-                        if os.path.splitext(fn)[1].lower() in SUPPORTED_EXTS
-                        and not is_lock_file(fn))
-            elif os.path.isfile(p):
-                files.append(p)
-        if not files:
-            self.log('拖入内容里没有支持的文档（docx/xlsx/pptx/pdf 及对应带宏格式）', 'err')
-            return 'copy'
-        files.sort()
-        before = len(self.files)
-        self._add_paths(files)
-        added = len(self.files) - before
-        if added:
-            self.log('—— 拖入新增 %d 个文件 ——' % added, 'ok')
+        if raw:
+            self._add_paths(list(raw))
         return 'copy'
 
     # ---- 文件列表 ---------------------------------------------------------
@@ -1175,56 +1331,96 @@ class CleanerApp(_Base):
     def add_folder(self):
         from tkinter import filedialog
         folder = filedialog.askdirectory(parent=self, title='选择文件夹（会递归查找支持的文档）')
-        if not folder:
-            return
-        found = []
-        for dirpath, _dirnames, filenames in os.walk(folder):
-            for fn in filenames:
-                if (os.path.splitext(fn)[1].lower() in SUPPORTED_EXTS
-                        and not is_lock_file(fn)):
-                    found.append(os.path.join(dirpath, fn))
-        if not found:
-            self.log('文件夹中没有找到支持的文档：' + folder)
-            return
-        self._add_paths(sorted(found))
+        if folder:
+            self._add_paths([folder])
 
     def _add_paths(self, paths):
-        known = {f['path'].lower() for f in self.files}
-        added = failed = 0
+        """把文件/目录加入扫描队列；忙碌时排队缓冲，结束后自动接续。"""
+        paths = [p for p in paths if p]
+        if not paths:
+            return
+        if self._busy:
+            self._pending_paths.extend(paths)
+            self.log('（正在处理上一批，稍后自动加入新拖入的 %d 项）' % len(paths))
+            return
+        self._launch_scan(list(paths))
+
+    def _launch_scan(self, paths):
+        self._set_busy(True, 'scan')
+        threading.Thread(target=self._scan_worker, args=(paths,), daemon=True).start()
+
+    def _scan_worker(self, paths):
+        """展开目录并逐个扫描，结果经队列送回主线程。"""
+        q = self._queue
+        files = []
         for p in paths:
-            if p.lower() in known:
-                continue
+            if os.path.isdir(p):
+                for dirpath, _dirs, fns in os.walk(p):
+                    files.extend(os.path.join(dirpath, fn) for fn in fns
+                                 if os.path.splitext(fn)[1].lower() in SUPPORTED_EXTS
+                                 and not is_lock_file(fn))
+            elif os.path.isfile(p):
+                files.append(p)
+        files.sort()
+        if not files:
+            q.put(('log', '拖入/选择的内容里没有支持的文档'
+                          '（docx/xlsx/pptx/pdf 及对应带宏格式）', 'err'))
+            q.put(('scan_done',))
+            return
+        total = len(files)
+        q.put(('progress', 0, total))
+        for i, fp in enumerate(files, 1):
+            if self._stop_event.is_set():
+                break
             try:
-                entry = scan_file(p)
+                entry = scan_file(fp)
+                entry['status'] = ('待处理', '')
+                q.put(('scanned', entry, None))
             except Exception as e:
-                failed += 1
-                self.log('✗ 无法读取 %s：%s' % (os.path.basename(p), e), 'err')
-                continue
-            self.files.append(entry)
-            known.add(p.lower())
-            added += 1
-            n_sus = len(entry['suspects'])
-            if n_sus:
-                self.log('＋ %s（发现 %d 项疑似 AI 痕迹）' % (os.path.basename(p), n_sus), 'ok')
-            else:
-                self.log('＋ %s' % os.path.basename(p))
-        self._rebuild_fields()
-        self._refresh_list()
+                q.put(('scanned', None, (os.path.basename(fp), str(e))))
+            q.put(('progress', i, total))
+        q.put(('scan_done',))
+
+    def _on_scanned(self, entry, err):
+        if entry is None:
+            name, msg = err
+            self.log('✗ 无法读取 %s：%s' % (name, msg), 'err')
+            return
+        if any(f['path'].lower() == entry['path'].lower() for f in self.files):
+            return  # 已在列表里，跳过重复
+        self.files.append(entry)
+        self._append_file_row(entry)
+        n_sus = len(entry['suspects'])
+        if n_sus:
+            self.log('＋ %s（发现 %d 项疑似 AI 痕迹）'
+                     % (os.path.basename(entry['path']), n_sus), 'ok')
+        else:
+            self.log('＋ %s' % os.path.basename(entry['path']))
+
+    def _on_scan_done(self):
+        if self._maybe_continue():
+            return
+        self._set_busy(False)
         if self.files and self.current_path is None:
-            self.file_list.selection_set(0)
             self.current_path = self.files[0]['path']
+            self.file_tree.selection_set(self.current_path)
+        self._rebuild_fields()
         self._refresh_tree()
         self.update_status()
 
     def remove_selected(self):
-        sel = self.file_list.curselection()
+        sel = self.file_tree.selection()
         if not sel:
             return
-        del self.files[sel[0]]
+        removed = set(sel)
+        self.files = [f for f in self.files if f['path'] not in removed]
         self.current_path = None
         self.detail.config(text='')
         self._rebuild_fields()
         self._refresh_list()
+        if self.files:
+            self.current_path = self.files[0]['path']
+            self.file_tree.selection_set(self.current_path)
         self._refresh_tree()
         self.update_status()
 
@@ -1237,15 +1433,58 @@ class CleanerApp(_Base):
         self._refresh_tree()
         self.update_status()
 
+    # ---- 文件列表渲染 / 路径悬浮提示 ---------------------------------------
     def _refresh_list(self):
-        self.file_list.delete(0, 'end')
+        self._hide_tooltip()
+        self.file_tree.delete(*self.file_tree.get_children())
         for f in self.files:
-            self.file_list.insert('end', os.path.basename(f['path']))
+            self._append_file_row(f)
 
-    def on_file_selected(self, _event):
-        sel = self.file_list.curselection()
-        if sel and sel[0] < len(self.files):
-            self.current_path = self.files[sel[0]]['path']
+    def _append_file_row(self, f):
+        status, tag = f.get('status') or ('待处理', '')
+        self.file_tree.insert('', 'end', iid=f['path'], tags=(tag,) if tag else (),
+                              values=(os.path.basename(f['path']), status))
+
+    def _update_file_row(self, path):
+        f = next((f for f in self.files if f['path'] == path), None)
+        if f is None:
+            return
+        status, tag = f.get('status') or ('待处理', '')
+        self.file_tree.item(path, tags=(tag,) if tag else (),
+                            values=(os.path.basename(path), status))
+
+    def _show_tooltip(self, text, x, y):
+        self._hide_tooltip()
+        self._tip = tw = tk.Toplevel(self)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry('+%d+%d' % (x, y))
+        tw._path = text
+        tk.Label(tw, text=text, justify='left', background='#ffffe0',
+                 relief='solid', borderwidth=1,
+                 font=('Microsoft YaHei UI', 9)).pack(padx=1, pady=1)
+
+    def _hide_tooltip(self, _event=None):
+        if self._tip is not None:
+            try:
+                self._tip.destroy()
+            except tk.TclError:
+                pass
+            self._tip = None
+
+    def _file_tooltip(self, event):
+        """文件名列只显示 basename，悬停显示完整路径，区分同名文件。"""
+        row = self.file_tree.identify_row(event.y)
+        if not row:
+            self._hide_tooltip()
+            return
+        if self._tip is not None and getattr(self._tip, '_path', None) == row:
+            return
+        self._show_tooltip(row, event.x_root + 14, event.y_root + 14)
+
+    def on_file_selected(self, _event=None):
+        sel = self.file_tree.selection()
+        if sel:
+            self.current_path = sel[0]
         self._refresh_values()
 
     # ---- 属性表 -----------------------------------------------------------
@@ -1480,6 +1719,8 @@ class CleanerApp(_Base):
     # ---- 清理 -------------------------------------------------------------
     def on_clean(self):
         from tkinter import messagebox
+        if self._busy:
+            return
         if not self.files:
             messagebox.showinfo('提示', '请先添加文件。')
             return
@@ -1493,62 +1734,169 @@ class CleanerApp(_Base):
                     '确认覆盖',
                     '覆盖模式会直接修改原文件（建议先备份）。\n确定继续吗？'):
                 return
+        # 主线程做快照，worker 只读快照，不再引用可变的界面状态
+        snapshot = (list(self.files), list(checked), dict(self.edits), mode)
+        self._set_busy(True, 'clean')
+        threading.Thread(target=self._clean_worker, args=snapshot, daemon=True).start()
 
-        self.start_btn.config(state='disabled')
+    def _clean_worker(self, files, checked, edits, mode):
+        q = self._queue
+        total = len(files)
+        if total:
+            q.put(('progress', 0, total))
         ok = fail = 0
-        try:
-            for f in list(self.files):
-                name = os.path.basename(f['path'])
-                _d, _s, skipped = collect_ops(f, checked, self.edits)
-                for k, why in skipped:
-                    self.log('· %s：%s 跳过（%s）' % (name, field_display_name(k), why))
-                try:
-                    dest, removed, edited = clean_file(f, checked, self.edits, mode)
-                except PermissionError:
-                    fail += 1
-                    self.log('✗ %s：文件被占用，请先关闭正在编辑它的程序' % name, 'err')
-                    continue
-                except Exception as e:
-                    fail += 1
-                    self.log('✗ %s：%s' % (name, e), 'err')
-                    continue
-                if removed or edited:
-                    parts = []
-                    if removed:
-                        parts.append('清除 %d 项：%s' % (
-                            len(removed), '、'.join(field_display_name(k) for k in removed)))
-                    if edited:
-                        parts.append('修改 %d 项：%s' % (
-                            len(edited), '、'.join('%s→%s' % (field_display_name(k), _truncate(v, 30))
-                                                  for k, v in edited)))
-                    detail = '；'.join(parts)
-                    if mode == 'overwrite':
-                        self.log('✓ %s → 已覆盖原文件（%s）' % (name, detail), 'ok')
-                    else:
-                        self.log('✓ %s → 已另存为 %s（%s）'
-                                 % (name, os.path.basename(dest), detail), 'ok')
-                    ok += 1
+        for i, f in enumerate(files, 1):
+            if self._stop_event.is_set():
+                break
+            name = os.path.basename(f['path'])
+            _d, _s, skipped = collect_ops(f, checked, edits)
+            for k, why in skipped:
+                q.put(('log', '· %s：%s 跳过（%s）' % (name, field_display_name(k), why), 'info'))
+            try:
+                dest, removed, edited = clean_file(f, checked, edits, mode)
+            except PermissionError:
+                fail += 1
+                q.put(('log', '✗ %s：文件被占用，请先关闭正在编辑它的程序' % name, 'err'))
+                q.put(('cleaned', f['path'], ('失败 ✗', 'err')))
+                q.put(('progress', i, total))
+                continue
+            except Exception as e:
+                fail += 1
+                q.put(('log', '✗ %s：%s' % (name, e), 'err'))
+                q.put(('cleaned', f['path'], ('失败 ✗', 'err')))
+                q.put(('progress', i, total))
+                continue
+            if removed or edited:
+                parts = []
+                if removed:
+                    parts.append('清除 %d 项：%s' % (
+                        len(removed), '、'.join(field_display_name(k) for k in removed)))
+                if edited:
+                    parts.append('修改 %d 项：%s' % (
+                        len(edited), '、'.join('%s→%s' % (field_display_name(k), _truncate(v, 30))
+                                              for k, v in edited)))
+                detail = '；'.join(parts)
+                if mode == 'overwrite':
+                    q.put(('log', '✓ %s → 已覆盖原文件（%s）' % (name, detail), 'ok'))
+                    status = ('已覆盖 ✓', 'ok')
                 else:
-                    self.log('· %s：勾选/修改的字段在该文件中不适用，未改动' % name)
-                    ok += 1
-                self.update_idletasks()
-        finally:
-            self.start_btn.config(state='normal')
+                    q.put(('log', '✓ %s → 已另存为 %s（%s）'
+                           % (name, os.path.basename(dest), detail), 'ok'))
+                    status = ('已另存 ✓', 'ok')
+                ok += 1
+            else:
+                q.put(('log', '· %s：勾选/修改的字段在该文件中不适用，未改动' % name, 'info'))
+                status = ('无改动', '')
+                ok += 1
+            q.put(('cleaned', f['path'], status))
+            if total:
+                q.put(('progress', i, total))
+        q.put(('clean_done', ok, fail, mode))
+
+    def _on_cleaned(self, path, status):
+        for f in self.files:
+            if f['path'] == path:
+                f['status'] = status
+                break
+        self._update_file_row(path)
+
+    def _on_clean_done(self, ok, fail, mode):
         self.edits.clear()
         self.log('—— 完成：成功 %d 个，失败 %d 个 ——' % (ok, fail), 'ok')
-        # 重新扫描，刷新预览
-        self._rescan_all()
+        if mode == 'overwrite':
+            # 覆盖模式：重扫刷新预览（保持忙碌，扫完自动解锁）
+            self._launch_rescan()
+            return
+        # 副本模式：列表里是未改动的原文件，重扫没有意义，直接收尾
+        if self._maybe_continue():
+            return
+        self._set_busy(False)
         self.update_status()
 
-    def _rescan_all(self):
-        for f in self.files:
+    def _launch_rescan(self):
+        self._set_busy(True, 'rescan')
+        threading.Thread(target=self._rescan_worker, daemon=True).start()
+
+    def _rescan_worker(self):
+        q = self._queue
+        files = list(self.files)
+        total = len(files)
+        if total:
+            q.put(('progress', 0, total))
+        for i, f in enumerate(files, 1):
+            if self._stop_event.is_set():
+                break
             try:
                 fresh = scan_file(f['path'])
-                f['props'], f['suspects'] = fresh['props'], fresh['suspects']
+                q.put(('rescanned', f['path'], fresh))
             except Exception:
-                pass
+                q.put(('rescanned', f['path'], None))
+            if total:
+                q.put(('progress', i, total))
+        q.put(('rescan_done',))
+
+    def _on_rescanned(self, path, fresh):
+        for f in self.files:
+            if f['path'] == path:
+                if fresh is not None:
+                    f['props'], f['suspects'] = fresh['props'], fresh['suspects']
+                break
+
+    def _on_rescan_done(self):
+        if self._maybe_continue():
+            return
+        self._set_busy(False)
         self._rebuild_fields()
         self._refresh_tree()
+        self.update_status()
+
+    # ---- 设置记忆 / 退出 ----------------------------------------------------
+    def _apply_saved_prefs(self, s):
+        if s.get('save_mode') in ('copy', 'overwrite'):
+            self.save_var.set(s['save_mode'])
+        if isinstance(s.get('auto_check'), bool):
+            self.auto_check_var.set(s['auto_check'])
+
+    def _save_prefs(self):
+        try:
+            save_settings({'save_mode': self.save_var.get(),
+                           'auto_check': self.auto_check_var.get(),
+                           'geometry': self.geometry()})
+        except tk.TclError:
+            pass
+
+    def _on_close(self):
+        from tkinter import messagebox
+        if self._busy and not messagebox.askyesno(
+                '正在处理', '后台任务仍在进行，中途退出可能留下未写完的临时文件。\n确定退出吗？'):
+            return
+        self._stop_event.set()
+        if self._pump_after is not None:  # 取消泵的定时回调，避免销毁后触发报错
+            try:
+                self.after_cancel(self._pump_after)
+            except tk.TclError:
+                pass
+        self._save_prefs()
+        self.destroy()
+
+    # ---- 异常兜底 -----------------------------------------------------------
+    def report_callback_exception(self, exc, val, tb):
+        """tkinter 回调里的未捕获异常：写崩溃日志并弹窗（窗口版 exe 里 stderr 不可见）。"""
+        from tkinter import messagebox
+        path = write_crash_log(exc, val, tb)
+        try:
+            self.log('✗ 程序内部错误：%s（详见 %s）' % (val, path), 'err')
+        except Exception:
+            pass
+        if time.time() - self._last_crash_dialog > 5:  # 连续出错时限流，避免弹窗刷屏
+            self._last_crash_dialog = time.time()
+            try:
+                messagebox.showerror(
+                    '程序内部错误',
+                    '%s\n\n详细信息已写入：\n%s' % (val, path or '（日志写入失败）'),
+                    parent=self)
+            except Exception:
+                pass
 
 
 def _truncate(s, n):
@@ -1562,7 +1910,20 @@ def main():
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
     except Exception:
         pass
-    app = CleanerApp()
+    try:
+        app = CleanerApp()
+    except Exception:
+        # 窗口还没建起来就出错：窗口版 exe 里 stderr 不可见，写日志并用系统弹窗报告
+        info = sys.exc_info()
+        write_crash_log(*info)
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(
+                0, '启动失败：%s\n\n详细信息已写入 %%APPDATA%%\\AIMetadataCleaner\\crash.log'
+                % info[1], '文档AI属性清理工具', 0x10)
+        except Exception:
+            pass
+        raise
     app.mainloop()
 
 

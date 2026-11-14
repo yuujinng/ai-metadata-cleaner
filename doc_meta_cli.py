@@ -11,7 +11,10 @@ import sys
 
 import doc_meta_cleaner as dmc
 
-__version__ = '1.1.0'
+try:
+    from version import __version__
+except ImportError:  # 单独拷贝本文件时兜底，正常随仓库分发不会走到
+    __version__ = 'dev'
 
 
 # ---------------------------------------------------------------------------

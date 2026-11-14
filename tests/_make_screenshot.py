@@ -34,6 +34,7 @@ app.geometry('1080x680+40+40')
 app.attributes('-topmost', True)
 app.update()
 app.on_drop(types.SimpleNamespace(data=drop_data))
+app.wait_for_idle()  # 拖入后扫描在后台线程进行，等扫描完成再截图
 app.update()
 
 

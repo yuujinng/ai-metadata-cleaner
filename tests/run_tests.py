@@ -366,8 +366,11 @@ def test_file_times():
         # 把创建时间设成明显的过去值，若恢复失败会跳变成"现在"，测试即可区分
         past_ns = int(datetime(2020, 6, 1, 8, 0, 0, tzinfo=timezone.utc).timestamp() * 1e9)
         dmc._set_win_creation_time(src, past_ns)
+    # 先扫描再取基准：扫描读取会让 atime 前进约 1ms（读取时更新 atime 的卷上），
+    # 而覆盖模式恢复的正是"扫描后"的 atime，基准必须与之对齐，否则断言必失败
+    entry = dmc.scan_file(src)
     st1 = os.stat(src)
-    dmc.clean_file(dmc.scan_file(src), ['creator'], {}, 'overwrite')
+    dmc.clean_file(entry, ['creator'], {}, 'overwrite')
     st2 = os.stat(src)
     check('覆盖模式 mtime 保留', st2.st_mtime_ns == st1.st_mtime_ns,
           (st1.st_mtime_ns, st2.st_mtime_ns))

@@ -29,11 +29,20 @@ if dmc.TkinterDnD is not None:
     # 模拟拖入：一个带空格路径 + 一个文件夹（应递归找到 inner.pdf）
     ev = types.SimpleNamespace(data='{%s} {%s}' % (spaced, folder))
     app.on_drop(ev)
+    app.wait_for_idle()  # 扫描在后台线程进行，等待完成后再断言
     names = sorted(os.path.basename(f['path']) for f in app.files)
     print('拖入后文件列表:', names)
     assert len(app.files) == 2, '拖入文件数量不对: %d' % len(app.files)
     assert 'inner.pdf' in names, '文件夹未递归展开'
     assert 'sample copy.docx' in names, '带空格路径解析失败'
+
+# 崩溃日志：写入 %APPDATA%/AIMetadataCleaner/crash.log（窗口版 exe 的异常兜底）
+try:
+    raise ValueError('smoke 崩溃日志测试')
+except ValueError:
+    crash_path = dmc.write_crash_log(*sys.exc_info())
+assert crash_path and os.path.exists(crash_path), '崩溃日志未生成'
+print('崩溃日志:', crash_path)
 
 # 选中 docx 文件做后续操作
 docx_entry = next(f for f in app.files if f['path'].endswith('.docx'))

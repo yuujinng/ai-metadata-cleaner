@@ -39,7 +39,10 @@ os.makedirs(work)
 doc = shutil.copy(sample, work)
 
 r = run('--version')
-check('版本号', r.returncode == 0 and 'ai-metadata-cleaner' in r.stdout,
+sys.path.insert(0, ROOT)
+import version as _ver  # noqa: E402
+check('版本号', r.returncode == 0 and 'ai-metadata-cleaner' in r.stdout
+      and _ver.__version__ in r.stdout,
       (r.returncode, r.stdout, r.stderr))
 
 r = run('scan', doc)

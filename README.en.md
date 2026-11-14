@@ -31,6 +31,7 @@
 - 🧽 **Thorough cleanup** — author, last-modified-by, application name, created/modified time, editing statistics, company, custom properties, plus PDF's Info dictionary and XMP metadata packet…
 - ✏️ **Free editing** — set any property to any value; "apply to all files" batch-unifies a whole batch; dates are converted to the standard document format automatically
 - 🖱️ **Drag & drop** — drop files or entire folders (recursively scanned) straight into the window
+- ⚡ **Background processing** — scanning and cleaning run on a background thread with a progress bar, so even folder-sized batches keep the UI responsive; results are marked in the file list (hover for the full path) and your save-mode / auto-check / window preferences are remembered
 - 🖥️ **Command-line mode** — `scan` / `clean` / `set` subcommands for batch processing and scripting, sharing the same core logic as the GUI
 - 🔒 **Zero damage to content** — only property parts are rewritten; the rest of the document is preserved byte-for-byte; overwrite mode writes to a temp file first and replaces atomically, so failures never harm the original
 - 🕐 **Leaves no processing traces** — cleaning does not touch the file's system timestamps (overwrite mode even restores the Windows creation time; copies keep the original's modification time)
@@ -155,6 +156,7 @@ The legacy binary `.doc/.xls/.ppt` formats are not supported yet.
 ai-metadata-cleaner/
 ├── doc_meta_cleaner.py       Core logic + GUI
 ├── doc_meta_cli.py           CLI entry (scan / clean / set)
+├── version.py                Single source of truth for the version (CLI / GUI title / exe version resource)
 ├── doc_meta_cleaner.spec     PyInstaller spec (builds the Windows exe)
 ├── README.en.md              English documentation
 ├── 文档AI属性清理工具.bat        Double-click launcher for running from source
@@ -186,7 +188,7 @@ python tests/_make_bat.py         # Regenerate the launcher (keep ASCII + CRLF)
 pyinstaller --noconfirm doc_meta_cleaner.spec   # Build a single-file exe locally (output in dist/)
 ```
 
-Releases: push a `vX.Y.Z` tag and the Release workflow runs the full test suite, builds the Windows single-file exe, and publishes it with the source zip as a GitHub Release.
+Releases: set `__version__` in `version.py` to the new version, commit, then push a matching `vX.Y.Z` tag — the Release workflow first verifies the tag matches `version.py` (and fails otherwise), then runs the full test suite, builds the Windows single-file exe, and publishes it with the source zip as a GitHub Release.
 
 > Note: the double-click launcher `文档AI属性清理工具.bat` must be saved as ASCII + CRLF — do not edit it and re-save as UTF-8 in an editor. If it breaks, regenerate it with `python tests/_make_bat.py`.
 

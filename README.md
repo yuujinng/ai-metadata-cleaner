@@ -31,6 +31,7 @@
 - 🧽 **彻底清除** — 作者、最后修改者、应用程序、创建/修改时间、编辑统计、公司、自定义属性、PDF 的 Info 字典与 XMP 元数据包……
 - ✏️ **随意修改** — 任意属性改成任意值，支持"应用到所有文件"批量统一，日期自动转成文档标准格式
 - 🖱️ **拖拽即用** — 文件或整个文件夹（递归扫描）直接拖进窗口
+- ⚡ **后台处理不卡界面** — 扫描与清理都在后台线程进行，整目录大批量也有进度条；结果直接标记在文件列表（悬停显示完整路径），保存方式、勾选偏好与窗口大小会被记住
 - 🖥️ **命令行模式** — `scan` / `clean` / `set` 子命令，支持批量与脚本自动化，与 GUI 共用同一套核心逻辑
 - 🔒 **正文零损伤** — 只改写属性部件，文档内容逐字节保留；覆盖模式先写临时文件再原子替换，失败不伤原文件
 - 🕐 **不留处理痕迹** — 清理不改动文件的系统时间戳（覆盖模式连 Windows 创建时间一并保留，副本沿用原文件修改时间）
@@ -155,6 +156,7 @@ python doc_meta_cli.py --list-fields    # 查看全部可操作的字段
 ai-metadata-cleaner/
 ├── doc_meta_cleaner.py       核心逻辑 + 图形界面
 ├── doc_meta_cli.py           命令行入口（scan / clean / set）
+├── version.py                版本号唯一来源（CLI / GUI 标题 / exe 版本资源都从这里取）
 ├── doc_meta_cleaner.spec     PyInstaller 打包配置（构建 Windows exe）
 ├── README.en.md              英文版说明
 ├── 文档AI属性清理工具.bat        源码运行的双击启动器
@@ -185,7 +187,7 @@ python tests/_make_bat.py         # 重新生成启动器（保持 ASCII + CRLF�
 pyinstaller --noconfirm doc_meta_cleaner.spec   # 本地构建单文件 exe（输出到 dist/）
 ```
 
-发版：推送 `vX.Y.Z` 标签后，Release 工作流会自动跑全量测试、构建 Windows 单文件 exe 并连同源码包一起发布 GitHub Release。
+发版：把 `version.py` 里的 `__version__` 改为本次版本并提交，再打对应的 `vX.Y.Z` 标签推送；Release 工作流会先校验标签与 `version.py` 一致（不一致直接失败），然后自动跑全量测试、构建 Windows 单文件 exe 并连同源码包一起发布 GitHub Release。
 
 > 注意：双击启动器 `文档AI属性清理工具.bat` 必须保持 ASCII + CRLF 格式保存，不要用编辑器修改后另存为 UTF-8；若损坏，运行 `python tests/_make_bat.py` 重新生成即可。
 

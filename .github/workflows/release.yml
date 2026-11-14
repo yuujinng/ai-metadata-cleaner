@@ -15,6 +15,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: 校验标签与 version.py 一致
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = "${{ github.ref_name }}" -replace '^v', ''
+          $v = python -c "import version; print(version.__version__)"
+          if ($tag -ne $v) {
+            Write-Error "标签 ${{ github.ref_name }} 与 version.py 的版本 $v 不一致；请修改 version.py 后重新打标签"
+            exit 1
+          }
+          Write-Output "版本一致：$v"
       - name: 发布前跑全量测试
         env:
           PYTHONIOENCODING: utf-8

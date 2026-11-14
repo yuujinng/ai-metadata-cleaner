@@ -2,9 +2,11 @@
 """PyInstaller 打包配置（仅 Windows）：pyinstaller --noconfirm doc_meta_cleaner.spec
 
 版本号通过环境变量 PYI_VERSION 注入（CI 打标签时由 release 工作流传入），
-本地未设置时用占位版本 1.0.0.0。文件名保持 ASCII，避免 CI shell 的编码问题。
+本地未设置时回退读取 version.py（版本号唯一来源）。文件名保持 ASCII，
+避免 CI shell 的编码问题。
 """
 import os
+import re
 
 from PyInstaller.utils.hooks import collect_all
 from PyInstaller.utils.win32.versioninfo import (
@@ -21,7 +23,19 @@ from PyInstaller.utils.win32.versioninfo import (
 # 中文名会被 softprops/action-gh-release 降级成 default.exe。
 # 中文产品名保留在下方版本资源（右键 → 详细信息）里。
 APP_NAME = 'AIMetadataCleaner'
-APP_VERSION = os.environ.get('PYI_VERSION', '1.0.0.0').lstrip('v')
+
+
+def _version_py():
+    """从 version.py（版本号唯一来源）读取 __version__，读不到时占位。"""
+    try:
+        with open(os.path.join(SPECPATH, 'version.py'), encoding='utf-8') as f:
+            m = re.search(r"__version__\s*=\s*'([^']+)'", f.read())
+        return m.group(1) if m else '0.0.0'
+    except OSError:
+        return '0.0.0'
+
+
+APP_VERSION = (os.environ.get('PYI_VERSION') or _version_py()).lstrip('v')
 
 
 def _make_version_file(version):

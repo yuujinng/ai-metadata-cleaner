@@ -4,6 +4,10 @@
 
 **一键清除或修改 Word / Excel / PPT / PDF 的属性（元数据），抹掉 AI 生成痕迹**
 
+🔒 **全程本地处理** — 文件不上传服务器，所有操作都在你自己的电脑上完成
+
+[![Release](https://img.shields.io/github/v/release/yuujinng/doc-meta-cleaner?style=flat-square)](../../releases)
+[![下载量](https://img.shields.io/github/downloads/yuujinng/doc-meta-cleaner/total?style=flat-square&label=%E4%B8%8B%E8%BD%BD)](../../releases)
 [![CI](https://github.com/yuujinng/doc-meta-cleaner/actions/workflows/ci.yml/badge.svg)](https://github.com/yuujinng/doc-meta-cleaner/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/github/license/yuujinng/doc-meta-cleaner?style=flat-square)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
@@ -43,12 +47,14 @@
 
 ## 🚀 快速开始
 
+> 💡 想先随便试试？仓库里的 [示例文件/](示例文件/) 有 4 个带 AI 痕迹的演示文档（Word / Excel / PPT / PDF 各一），拖进来练个手。
+
 **方式一：下载 exe（推荐，无需安装 Python）**
 
 1. 打开 [Releases](../../releases) 页，下载最新版的 **DocMetaCleaner.exe**（约 15 MB）；
 2. 双击运行即可。**无需安装 Python**，所有组件已内置，离线也能用；文件属性里的产品名仍是「文档属性清理工具」。
 
-> 浏览器或 Windows SmartScreen 可能提示「未知发布者 / 已保护你的电脑」：exe 尚未做数字签名，点「更多信息 → 仍要运行」即可。个别杀毒软件可能误报（PyInstaller 打包的常见现象），加入信任列表即可。
+> 浏览器或 Windows SmartScreen 可能提示「未知发布者 / 已保护你的电脑」：exe 尚未做数字签名，点「更多信息 → 仍要运行」即可。个别杀毒软件可能误报（PyInstaller 打包的常见现象），加入信任列表即可。如需核对完整性，Release 页附有 exe 的 SHA256 校验值。
 
 **方式二：源码运行（需要 Python，适合开发者）**
 
@@ -63,7 +69,7 @@
 ```bash
 git clone https://github.com/yuujinng/doc-meta-cleaner.git
 cd doc-meta-cleaner
-pip install pypdf tkinterdnd2
+pip install -r requirements.txt
 python doc_meta_cleaner.py
 ```
 

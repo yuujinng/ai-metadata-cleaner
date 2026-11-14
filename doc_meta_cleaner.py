@@ -101,6 +101,12 @@ OOXML_EXTS = {'.docx', '.docm', '.xlsx', '.xlsm', '.pptx', '.pptm', '.ppsx', '.p
 PDF_EXTS = {'.pdf'}
 SUPPORTED_EXTS = OOXML_EXTS | PDF_EXTS
 
+
+def is_lock_file(path):
+    """Word/WPS 打开文档时会在同目录生成 ~$ 开头的锁文件，不是文档本身，
+    读取必然失败，目录扫描时应跳过。"""
+    return os.path.basename(path).startswith('~$')
+
 # ---------------------------------------------------------------------------
 # 疑似 AI / 自动化痕迹识别
 # ---------------------------------------------------------------------------
@@ -1142,7 +1148,8 @@ class CleanerApp(_Base):
                 for dirpath, _dirs, fns in os.walk(p):
                     files.extend(
                         os.path.join(dirpath, fn) for fn in fns
-                        if os.path.splitext(fn)[1].lower() in SUPPORTED_EXTS)
+                        if os.path.splitext(fn)[1].lower() in SUPPORTED_EXTS
+                        and not is_lock_file(fn))
             elif os.path.isfile(p):
                 files.append(p)
         if not files:
@@ -1173,7 +1180,8 @@ class CleanerApp(_Base):
         found = []
         for dirpath, _dirnames, filenames in os.walk(folder):
             for fn in filenames:
-                if os.path.splitext(fn)[1].lower() in SUPPORTED_EXTS:
+                if (os.path.splitext(fn)[1].lower() in SUPPORTED_EXTS
+                        and not is_lock_file(fn)):
                     found.append(os.path.join(dirpath, fn))
         if not found:
             self.log('文件夹中没有找到支持的文档：' + folder)

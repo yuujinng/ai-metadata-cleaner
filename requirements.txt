@@ -1,0 +1,5 @@
+# 运行依赖。CI（ci.yml）与 Release（release.yml）都从这里安装，
+# pypdf 按大版本锁定，避免上游大版本变更悄悄破坏构建（clean_pdf 用到了其内部 API）。
+# tkinterdnd2 只用 DND_FILES / TkinterDnD 两个稳定导出，锁到已验证的版本线即可。
+pypdf>=6.0,<7
+tkinterdnd2>=0.7,<1

@@ -91,6 +91,30 @@ check('指定字段已清除', 'AI 起草的测试报告' not in r.stdout
 r = run('set', cleaned, 'invalid-syntax')
 check('非法赋值格式（exit 2）', r.returncode == 2, (r.returncode, r.stdout, r.stderr))
 
+# 目录里混入 Word/WPS 的 ~$ 锁文件：应被跳过而不是当成坏文件报错
+work2 = os.path.join(OUT, 'cli_locks')
+shutil.rmtree(work2, ignore_errors=True)
+os.makedirs(work2)
+shutil.copy(sample, os.path.join(work2, 'a.docx'))
+open(os.path.join(work2, '~$a.docx'), 'wb').close()
+r = run('scan', work2)
+check('scan 跳过 ~$ 锁文件', r.returncode == 0 and '~$' not in r.stdout
+      and '~$' not in r.stderr and 'a.docx' in r.stdout,
+      (r.returncode, r.stdout[:300], r.stderr[:300]))
+
+# 文件被占用（父进程保持句柄打开）：单文件失败应有友好提示并继续，而不是 traceback 崩溃
+handle = open(doc, 'rb')
+try:
+    r = run('clean', doc, '--fields', 'all', '--mode', 'overwrite')
+finally:
+    handle.close()
+check('文件被占用时友好报错（exit 1，无 traceback）',
+      r.returncode == 1 and '被占用' in (r.stdout + r.stderr)
+      and 'Traceback' not in r.stderr,
+      (r.returncode, r.stdout[:300], r.stderr[:500]))
+r = run('clean', doc, '--fields', 'all', '--mode', 'overwrite')
+check('占用解除后可正常清理', r.returncode == 0, (r.returncode, r.stdout[:200], r.stderr[:300]))
+
 print()
 if FAILURES:
     print('FAILED:', len(FAILURES), FAILURES)

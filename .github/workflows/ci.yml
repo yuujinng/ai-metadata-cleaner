@@ -22,7 +22,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: 安装依赖
-        run: pip install pypdf tkinterdnd2
+        run: pip install -r requirements.txt
       - name: 核心逻辑测试
         run: python tests/run_tests.py
       - name: GUI 冒烟测试

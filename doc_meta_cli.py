@@ -58,7 +58,8 @@ def iter_files(paths):
             for root, _dirs, names in os.walk(p):
                 for n in names:
                     fp = os.path.join(root, n)
-                    if os.path.splitext(n)[1].lower() in dmc.SUPPORTED_EXTS:
+                    if (os.path.splitext(n)[1].lower() in dmc.SUPPORTED_EXTS
+                            and not dmc.is_lock_file(n)):
                         files.append(fp)
         elif os.path.isfile(p):
             if os.path.splitext(p)[1].lower() in dmc.SUPPORTED_EXTS:
@@ -98,6 +99,20 @@ def _print_result(name, dest, removed, edited, mode):
                                       sorted(removed, key=dmc.field_sort_key)))
     for k, v in edited:
         print('    修改：%s = %s' % (dmc.field_display_name(k), _short(v, 36)))
+
+
+def _run_clean(name, entry, checked, edits, mode):
+    """执行清理并打印结果；单文件失败时给出警告而不中断整批。返回是否成功。"""
+    try:
+        dest, removed, edited = dmc.clean_file(entry, checked, edits, mode)
+    except PermissionError:
+        print('⚠ %s：文件被占用，请先关闭正在编辑它的程序' % name, file=sys.stderr)
+        return False
+    except Exception as exc:
+        print('⚠ %s：%s' % (name, exc), file=sys.stderr)
+        return False
+    _print_result(name, dest, removed, edited, mode)
+    return True
 
 
 def resolve_fields(spec, entry):
@@ -208,9 +223,10 @@ def cmd_clean(args):
             print('⚠ 跳过 %s：%s' % (name, exc), file=sys.stderr)
             failed = True
             continue
-        dest, removed, edited = dmc.clean_file(entry, checked, {}, args.mode)
-        _print_result(name, dest, removed, edited, args.mode)
-        ok += 1
+        if _run_clean(name, entry, checked, {}, args.mode):
+            ok += 1
+        else:
+            failed = True
     return _summary(ok, len(files), failed)
 
 
@@ -232,9 +248,10 @@ def cmd_set(args):
             print('⚠ 跳过 %s：%s' % (name, exc), file=sys.stderr)
             failed = True
             continue
-        dest, removed, edited = dmc.clean_file(entry, checked, edits, args.mode)
-        _print_result(name, dest, removed, edited, args.mode)
-        ok += 1
+        if _run_clean(name, entry, checked, edits, args.mode):
+            ok += 1
+        else:
+            failed = True
     return _summary(ok, len(files), failed)
 
 

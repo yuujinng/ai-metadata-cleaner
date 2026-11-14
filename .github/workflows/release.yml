@@ -19,7 +19,7 @@ jobs:
         env:
           PYTHONIOENCODING: utf-8
         run: |
-          pip install pypdf tkinterdnd2
+          pip install -r requirements.txt
           python tests/run_tests.py
           python tests/gui_smoke.py
           python tests/cli_smoke.py

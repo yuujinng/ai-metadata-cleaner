@@ -200,6 +200,11 @@ def is_auto_checkable(key):
             or key in APP_STAT_KEYS)
 
 
+def auto_clean_keys(entry):
+    """与命令行共用的默认清理范围；内容字段只提示。"""
+    return {key for key in entry['suspects'] if is_auto_checkable(key)}
+
+
 def looks_like_ai(value, strict=False):
     """值里是否带有 AI 工具或脚本生成库的痕迹。
 
@@ -818,17 +823,19 @@ def _serialize_xmp(root, original_bytes):
     return (decl + _XPACKET_BEGIN + body + _XPACKET_END).encode('utf-8')
 
 
-def _rewrite_xmp(xml_bytes, del_props, set_props):
+def _rewrite_xmp(xml_bytes, del_props, set_props, *, strict=False):
     """把 Info 字段的删除/修改同步进 XMP 包。
 
     del_props: Info 字段名列表（如 ['Producer']）；set_props: {Info 字段名: 值}。
     同时支持元素形式（<pdf:Producer>x</pdf:Producer>）与属性形式
     （<rdf:Description pdf:Producer="x">）。返回 (新字节, 删除的字段,
-    写入的字段)；XMP 无法解析时返回 None。
+    写入的字段)；XMP 无法解析时返回 None，strict 模式下报告失败。
     """
     try:
         root = ET.fromstring(xml_bytes)
-    except ET.ParseError:
+    except ET.ParseError as exc:
+        if strict:
+            raise ValueError('无法解析 PDF 的 XMP，无法同步属性修改') from exc
         return None
     removed_keys, edited_keys = [], []
 
@@ -858,8 +865,12 @@ def _rewrite_xmp(xml_bytes, del_props, set_props):
         ns, local, kind = mapping
         tag = '{%s}%s' % (ns, local)
         value = _xmp_value(name, raw_value)
-        elem = next((e for e in root.iter() if e.tag == tag), None)
-        if elem is not None:
+        nodes = list(root.iter())
+        elements = [e for e in nodes if e.tag == tag]
+        attributes = [e for e in nodes if tag in e.attrib]
+        for e in attributes:
+            e.set(tag, value)
+        for elem in elements:
             subs = list(elem)
             for s in subs:
                 elem.remove(s)
@@ -869,11 +880,13 @@ def _rewrite_xmp(xml_bytes, del_props, set_props):
                 li.text = value
             else:
                 elem.text = value
-        else:
-            desc = next((e for e in root.iter() if _local(e.tag) == 'Description'), None)
+        if not elements and not attributes:
+            desc = next((e for e in nodes if e.tag == '{%s}Description' % RDF_NS), None)
             if desc is None:
-                rdf = next((e for e in root.iter() if _local(e.tag) == 'RDF'), None)
+                rdf = next((e for e in nodes if e.tag == '{%s}RDF' % RDF_NS), None)
                 if rdf is None:
+                    if strict:
+                        raise ValueError('PDF 的 XMP 缺少 RDF 结构，无法同步属性修改')
                     continue
                 desc = ET.SubElement(rdf, '{%s}Description' % RDF_NS)
                 desc.set('{%s}about' % RDF_NS, '')
@@ -947,13 +960,13 @@ def clean_pdf(src, dst, delete_keys, set_ops):
     if '/Metadata' in writer.root_object:
         info_sets = {k[4:]: v for k, v in set_ops.items()
                      if k.startswith('pdf:') and k not in (XMP_KEY, PAGEMETA_KEY)}
-        if info_dels or info_sets:
+        if any(k in INFO_XMP_MAP for k in (*info_dels, *info_sets)):
             xmp_stream = writer.root_object[NameObject('/Metadata')].get_object()
             try:
                 raw = xmp_stream.get_data()
-            except Exception:
-                raw = b''
-            result = _rewrite_xmp(raw, info_dels, info_sets)
+            except Exception as exc:
+                raise ValueError('无法读取 PDF 的 XMP，无法同步属性修改') from exc
+            result = _rewrite_xmp(raw, info_dels, info_sets, strict=True)
             if result is not None and (result[1] or result[2]):
                 _replace_xmp_stream(writer, result[0])
 
@@ -1026,11 +1039,11 @@ def collect_ops(entry, checked_keys, edits):
     edits: {key: {'value': 非空新值, 'all': 是否应用到全部, 'path': 编辑时选中文件}}
     返回 (删除 key 列表, 修改 {key: value}, 跳过 [(key, 原因)])。
     """
-    delete = [k for k in checked_keys if k in entry['props'] and k not in edits]
+    applicable_edits = {k: e for k, e in edits.items()
+                        if e['all'] or e['path'] == entry['path']}
+    delete = [k for k in checked_keys if k in entry['props'] and k not in applicable_edits]
     sets, skipped = {}, []
-    for key, e in edits.items():
-        if not (e['all'] or e['path'] == entry['path']):
-            continue
+    for key, e in applicable_edits.items():
         if key in (XMP_KEY, PAGEMETA_KEY):
             skipped.append((key, 'XMP / 页面级元数据不支持直接编辑'))
             continue
@@ -1219,7 +1232,10 @@ class CleanerApp(_Base):
         settings = load_settings()
 
         self.files = []          # [ {path, kind, props, suspects, status} ]
-        self.fields = {}         # key -> {name, suspect, checked}
+        self.fields = {}         # key -> {name}
+        self.batch_checks = {}   # 手动勾选应用到整批文件
+        self.file_checks = {}    # (path, key) -> 留空编辑时只清除当前文件
+        self.suspects_only = False
         self.edits = {}          # key -> {'value', 'all', 'path'}（待应用的修改）
         self.current_path = None
 
@@ -1281,7 +1297,7 @@ class CleanerApp(_Base):
         self.auto_check_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             bar, text='添加时自动勾选身份类痕迹（作者/程序/时间）',
-            variable=self.auto_check_var).pack(side='right')
+            variable=self.auto_check_var, command=self._on_auto_check).pack(side='right')
 
         # 主体：左文件列表 / 右属性表
         body = ttk.Panedwindow(self, orient='horizontal')
@@ -1309,7 +1325,7 @@ class CleanerApp(_Base):
         body.add(left, weight=1)
 
         right = ttk.Frame(body)
-        ttk.Label(right, text='属性预览（勾选=清除该字段；双击“当前值”一列可直接编辑修改）').pack(anchor='w')
+        ttk.Label(right, text='属性预览（自动勾选按文件；手动勾选应用整批；双击当前值可编辑）').pack(anchor='w')
         treeframe = ttk.Frame(right)
         treeframe.pack(fill='both', expand=True)
         cols = ('chk', 'name', 'value', 'flag')
@@ -1380,8 +1396,8 @@ class CleanerApp(_Base):
         self.update_idletasks()
 
     def update_status(self):
-        checked = sum(1 for v in self.fields.values() if v['checked'])
-        self.status.config(text='共 %d 个文件，已勾选 %d 个字段，待修改 %d 项'
+        checked = len(self._checked_keys(self._current_entry()))
+        self.status.config(text='共 %d 个文件，当前文件勾选 %d 个字段，待修改 %d 项'
                            % (len(self.files), checked, len(self.edits)))
 
     # ---- 后台任务调度 ------------------------------------------------------
@@ -1651,24 +1667,34 @@ class CleanerApp(_Base):
         if sel:
             self.current_path = sel[0]
         self._refresh_values()
+        self.update_status()
 
     # ---- 属性表 -----------------------------------------------------------
     def _rebuild_fields(self):
-        prev = self.fields
-        new_fields = {}
-        auto = self.auto_check_var.get()
-        for f in self.files:
-            for key in f['props']:
-                entry = new_fields.get(key)
-                if entry is None:
-                    was = prev.get(key)
-                    suspect = key in f['suspects']
-                    checked = was['checked'] if was else (suspect and auto and is_auto_checkable(key))
-                    new_fields[key] = {'name': field_display_name(key),
-                                       'suspect': suspect, 'checked': checked}
-                elif key in f['suspects']:
-                    entry['suspect'] = True
-        self.fields = new_fields
+        keys = dict.fromkeys(key for f in self.files for key in f['props'])
+        self.fields = {key: {'name': field_display_name(key)} for key in keys}
+        paths = {f['path'] for f in self.files}
+        self.batch_checks = {k: v for k, v in self.batch_checks.items() if k in self.fields}
+        self.file_checks = {(p, k): v for (p, k), v in self.file_checks.items() if p in paths}
+        self.edits = {k: v for k, v in self.edits.items()
+                      if paths and (v['all'] or v['path'] in paths)}
+        if not paths:
+            self.suspects_only = False
+
+    def _on_auto_check(self):
+        self.suspects_only = False
+        self._refresh_values()
+        self.update_status()
+
+    def _checked_keys(self, entry):
+        if entry is None:
+            return set()
+        defaults = (entry['suspects'] if self.suspects_only else
+                    auto_clean_keys(entry) if self.auto_check_var.get() else set())
+        return {k for k in entry['props']
+                if self.file_checks.get((entry['path'], k),
+                                        self.batch_checks.get(k, k in defaults))
+                and not self._edit_applies(entry, k)}
 
     def _current_entry(self):
         for f in self.files:
@@ -1679,26 +1705,28 @@ class CleanerApp(_Base):
     def _refresh_tree(self):
         self.tree.delete(*self.tree.get_children())
         entry = self._current_entry() or (self.files[0] if self.files else None)
+        checked = self._checked_keys(entry)
         for key in sorted(self.fields, key=field_sort_key):
             meta = self.fields[key]
-            value, flag, tags = self._row_values(key, meta, entry)
+            value, flag, tags = self._row_values(key, entry, key in checked)
             self.tree.insert('', 'end', iid=key, values=(
-                self._glyph(meta['checked']), meta['name'], value, flag), tags=tags)
+                self._glyph(key in checked), meta['name'], value, flag), tags=tags)
 
-    def _row_values(self, key, meta, entry):
+    def _row_values(self, key, entry, checked):
         """计算一行的 值/标记/样式，包含待应用修改的展示。"""
         val = entry['props'].get(key) if entry is not None else None
         disp = '—' if val is None else str(val)
-        flag = '⚠ AI痕迹' if meta['suspect'] else ''
+        suspect = entry is not None and key in entry['suspects']
+        flag = '⚠ AI痕迹' if suspect else ''
         tags = []
         edit = self.edits.get(key)
         if edit and entry is not None and self._edit_applies(entry, key):
             disp = '%s  →  %s' % (val if val is not None else '（无）', edit['value'])
             flag = (flag + ' ' if flag else '') + '✎ 待修改'
             tags.append('edited')
-        if meta['suspect']:
+        if suspect:
             tags.append('suspect')
-        if meta['checked']:
+        if checked:
             tags.append('checked')
         return _truncate(disp, 90), flag, tags
 
@@ -1710,8 +1738,10 @@ class CleanerApp(_Base):
 
     def _refresh_values(self):
         entry = self._current_entry()
+        checked = self._checked_keys(entry)
         for key in self.fields:
-            value, flag, _tags = self._row_values(key, self.fields[key], entry)
+            value, flag, _tags = self._row_values(key, entry, key in checked)
+            self.tree.set(key, 'chk', self._glyph(key in checked))
             self.tree.set(key, 'value', value)
             self.tree.set(key, 'flag', flag)
             self.tree.item(key, tags=_tags)
@@ -1722,22 +1752,18 @@ class CleanerApp(_Base):
 
     def _set_checked(self, key, checked):
         """设置勾选状态；勾选清除与待应用修改互斥。"""
-        meta = self.fields.get(key)
-        if meta is None:
+        if key not in self.fields:
             return
-        meta['checked'] = checked
+        self.batch_checks[key] = checked
+        self.file_checks = {pk: v for pk, v in self.file_checks.items() if pk[1] != key}
         if checked:
             self.edits.pop(key, None)
-        value, flag, tags = self._row_values(key, meta, self._current_entry())
-        self.tree.set(key, 'chk', self._glyph(checked))
-        self.tree.set(key, 'value', value)
-        self.tree.set(key, 'flag', flag)
-        self.tree.item(key, tags=tags)
+        self._refresh_values()
         self.update_status()
 
     def _toggle(self, iid):
         if iid and iid in self.fields:
-            self._set_checked(iid, not self.fields[iid]['checked'])
+            self._set_checked(iid, iid not in self._checked_keys(self._current_entry()))
 
     def on_tree_click(self, event):
         if self.tree.identify('region', event.x, event.y) != 'cell':
@@ -1771,19 +1797,25 @@ class CleanerApp(_Base):
         entry = self._current_entry()
         val = entry['props'].get(key, '（该文件无此字段）') if entry else '（未知文件）'
         text = '%s：%s' % (self.fields[key]['name'], val)
-        if self._edit_applies(entry or {}, key):
+        if self._edit_applies(entry, key):
             text += '；将改为：%s' % self.edits[key]['value']
         self.detail.config(text=text)
 
     def set_all(self, checked):
-        for key in self.fields:
-            self._set_checked(key, checked)
+        self.suspects_only = False
+        self.batch_checks = dict.fromkeys(self.fields, checked)
+        self.file_checks.clear()
+        if checked:
+            self.edits.clear()
+        self._refresh_values()
+        self.update_status()
 
     def check_suspects_only(self):
-        self.set_all(False)
-        for key, meta in self.fields.items():
-            if meta['suspect']:
-                self._set_checked(key, True)
+        self.suspects_only = True
+        self.batch_checks.clear()
+        self.file_checks.clear()
+        self._refresh_values()
+        self.update_status()
 
     # ---- 编辑属性 ---------------------------------------------------------
     def _edit_hint(self, kind, key):
@@ -1806,11 +1838,17 @@ class CleanerApp(_Base):
         if value == '':
             # 留空 = 清除：交给已有的勾选删除流程
             self.edits.pop(key, None)
-            self._set_checked(key, True)
+            if apply_all:
+                self._set_checked(key, True)
+            else:
+                self.file_checks[(entry['path'], key)] = True
         else:
             self.edits[key] = {'value': value, 'all': bool(apply_all),
                                'path': entry['path']}
-            self._set_checked(key, False)
+            if apply_all:
+                self.file_checks = {pk: v for pk, v in self.file_checks.items() if pk[1] != key}
+            else:
+                self.file_checks.pop((entry['path'], key), None)
         self._refresh_tree()
         self.update_status()
         return True, ''
@@ -1843,7 +1881,7 @@ class CleanerApp(_Base):
             return
         meta = self.fields[key]
         current = entry['props'].get(key)
-        pending = self.edits.get(key)
+        pending = self.edits.get(key) if self._edit_applies(entry, key) else None
 
         dlg = tk.Toplevel(self)
         dlg.title('编辑属性：%s' % meta['name'])
@@ -1892,8 +1930,8 @@ class CleanerApp(_Base):
         if not self.files:
             messagebox.showinfo('提示', '请先添加文件。')
             return
-        checked = [k for k, v in self.fields.items() if v['checked']]
-        if not checked and not self.edits:
+        checked = {f['path']: self._checked_keys(f) for f in self.files}
+        if not any(checked.values()) and not self.edits:
             messagebox.showinfo('提示', '请先在右侧勾选要清除的字段，或双击属性值进行修改。')
             return
         mode = self.save_var.get()
@@ -1903,11 +1941,11 @@ class CleanerApp(_Base):
                     '覆盖模式会直接修改原文件（建议先备份）。\n确定继续吗？'):
                 return
         # 主线程做快照，worker 只读快照，不再引用可变的界面状态
-        snapshot = (list(self.files), list(checked), dict(self.edits), mode)
+        snapshot = (list(self.files), checked, dict(self.edits), mode)
         self._set_busy(True, 'clean')
         threading.Thread(target=self._clean_worker, args=snapshot, daemon=True).start()
 
-    def _clean_worker(self, files, checked, edits, mode):
+    def _clean_worker(self, files, checked_by_path, edits, mode):
         q = self._queue
         total = len(files)
         if total:
@@ -1917,6 +1955,7 @@ class CleanerApp(_Base):
             if self._stop_event.is_set():
                 break
             name = os.path.basename(f['path'])
+            checked = checked_by_path[f['path']]
             _d, _s, skipped = collect_ops(f, checked, edits)
             for k, why in skipped:
                 q.put(('log', '· %s：%s 跳过（%s）' % (name, field_display_name(k), why), 'info'))

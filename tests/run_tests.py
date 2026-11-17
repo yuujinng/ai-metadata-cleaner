@@ -635,6 +635,16 @@ def test_xmp_rewrite_units():
         ' pdf:Producer="Skia/PDF m123">'
         '</rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="w"?>'
     ).encode('utf-8')
+    direct = dmc._rewrite_xmp(xml, [], {'Producer': 'Word'})
+    check('直接修改属性形式 XMP 不留下旧 Producer',
+          direct is not None and b'Skia' not in direct[0]
+          and b'Producer="Word"' in direct[0])
+    mixed = xml.replace(b'</rdf:Description>',
+                        b'<pdf:Producer>old element</pdf:Producer></rdf:Description>')
+    rewritten = dmc._rewrite_xmp(mixed, [], {'Producer': 'Word'})
+    check('并存的属性和元素形式一起更新',
+          rewritten is not None and b'Skia' not in rewritten[0]
+          and b'old element' not in rewritten[0] and rewritten[0].count(b'Word') == 2)
     out = dmc._rewrite_xmp(xml, ['Producer'], {'Producer': 'Word'})
     check('属性形式 XMP 可改写', out is not None)
     new_bytes, xd, xe = out

@@ -121,12 +121,23 @@ def _print_result(name, dest, removed, edited, mode):
 def _run_clean(name, entry, checked, edits, mode, json_mode=False):
     """执行清理；单文件失败时给出警告而不中断整批。
 
-    返回结果 dict：{name, ok, dest, changed, removed, edited, error}；
+    返回结果 dict：{name, ok, dest, changed, removed, edited, skipped, error}；
     json_mode=True 时只收集不打印。
     """
     result = {'name': name, 'ok': False, 'dest': None, 'changed': False,
-              'removed': [], 'edited': [], 'error': None}
+              'removed': [], 'edited': [], 'skipped': [], 'error': None}
+
+    def report_skipped(skipped):
+        result['skipped'] = [{'key': k, 'reason': why} for k, why in skipped]
+        result['error'] = '；'.join('%s：%s' % (k, why) for k, why in skipped)
+        if not json_mode:
+            print('⚠ %s：%s' % (name, result['error']), file=sys.stderr)
+
     try:
+        deletes, sets, skipped = dmc.collect_ops(entry, checked, edits)
+        if skipped:
+            report_skipped(skipped)
+            return result
         dest, removed, edited = dmc.clean_file(entry, checked, edits, mode)
     except PermissionError:
         msg = '文件被占用，请先关闭正在编辑它的程序'
@@ -139,9 +150,15 @@ def _run_clean(name, entry, checked, edits, mode, json_mode=False):
             print('⚠ %s：%s' % (name, exc), file=sys.stderr)
         result['error'] = str(exc)
         return result
-    result.update(ok=True, dest=dest, changed=bool(removed or edited),
+    result.update(dest=dest if dest != entry['path'] or mode == 'overwrite' else None,
+                  changed=bool(removed or edited),
                   removed=list(removed),
                   edited=[{'key': k, 'value': v} for k, v in edited])
+    unapplied = (set(deletes) - set(removed)) | (sets.keys() - dict(edited).keys())
+    if unapplied:
+        report_skipped([(k, '未能写入所请求的变更') for k in sorted(unapplied)])
+        return result
+    result['ok'] = True
     if not json_mode:
         _print_result(name, dest, removed, edited, mode)
     return result
@@ -150,11 +167,11 @@ def _run_clean(name, entry, checked, edits, mode, json_mode=False):
 def resolve_fields(spec, entry):
     """把 --fields 规格解析为该文件实际存在的 key 列表。
 
-    auto=仅疑似 AI 痕迹；all=全部属性；其余按逗号分隔，接受字段 key 或中文名称。
+    auto=与界面相同的默认清理范围；all=全部属性；其余按逗号分隔。
     """
     props = entry['props']
     if spec == 'auto':
-        return list(entry['suspects'])
+        return sorted(dmc.auto_clean_keys(entry))
     if spec == 'all':
         return list(props)
     keys = []
@@ -196,7 +213,7 @@ def _build_set_ops(entry, path, assigns):
         if key in (dmc.XMP_KEY, dmc.PAGEMETA_KEY, dmc.THUMB_KEY):
             raise ValueError('%s 不支持逐项编辑，只能整体清除（clean --fields %s）'
                              % (key, key))
-        if raw == '':
+        if not raw.strip():
             if key in props:
                 checked.append(key)
             else:
@@ -290,7 +307,13 @@ def cmd_clean(args):
 
 def cmd_set(args):
     try:
-        assigns = _parse_assigns(args.assigns)
+        # 两组 nargs='+' 会把除最后一项外的所有赋值都误当成路径。
+        # 第一个路径之后，从首个非现有路径的「字段=值」开始解析赋值。
+        split = next((i for i, item in enumerate(args.items[1:], 1)
+                      if '=' in item and not os.path.exists(item)), len(args.items))
+        if split == len(args.items):
+            raise ValueError('请在文件或目录之后提供至少一个 字段=值')
+        assigns = _parse_assigns(args.items[split:])
     except ValueError as exc:
         if args.json:
             _emit_json({'command': 'set', 'error': str(exc),
@@ -298,7 +321,7 @@ def cmd_set(args):
         else:
             print('⚠ %s' % exc, file=sys.stderr)
         return 2
-    files, missing, unsupported = iter_files(args.paths)
+    files, missing, unsupported = iter_files(args.items[:split])
     failed = _warn_paths(missing, unsupported, json_mode=args.json)
     ok = 0
     out, errors = [], []
@@ -380,18 +403,17 @@ def build_parser():
     p_scan.add_argument('paths', nargs='+', metavar='文件或目录')
     _add_json(p_scan)
 
-    p_clean = sub.add_parser('clean', help='清除属性（默认清除疑似 AI 痕迹）')
+    p_clean = sub.add_parser('clean', help='清除属性（默认保留标题、关键词等内容字段）')
     p_clean.add_argument('paths', nargs='+', metavar='文件或目录')
     p_clean.add_argument('--mode', choices=('copy', 'overwrite'), default='copy',
                          help='copy=另存副本（默认），overwrite=覆盖原文件')
     p_clean.add_argument('--fields', default='auto',
-                         help='auto=仅疑似 AI 痕迹（默认）；all=全部属性；'
+                         help='auto=仅清除可自动勾选的疑似属性（默认）；all=全部属性；'
                               '或逗号分隔的字段 key/名称')
     _add_json(p_clean)
 
     p_set = sub.add_parser('set', help='修改属性：字段=值（值留空表示清除）')
-    p_set.add_argument('paths', nargs='+', metavar='文件或目录')
-    p_set.add_argument('assigns', nargs='+', metavar='字段=值')
+    p_set.add_argument('items', nargs='+', metavar='文件或目录 … 字段=值')
     p_set.add_argument('--mode', choices=('copy', 'overwrite'), default='copy',
                        help='copy=另存副本（默认），overwrite=覆盖原文件')
     _add_json(p_set)

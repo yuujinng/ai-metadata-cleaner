@@ -87,7 +87,7 @@ python doc_meta_cleaner.py
 **Clean properties, in four steps:**
 
 1. **Drag files or an entire folder into the window** (folders are scanned recursively for supported documents), or use **Add files** / **Add folder**;
-2. The right pane lists all properties; suspected AI traces are highlighted in red: identity fields such as **author, generator, time statistics are pre-checked**, while content-related fields like title/keywords are only flagged (check them manually if needed); click the ☑/☐ in the first column or double-click a row to toggle — the check state applies to all files in the list;
+2. The right pane shows the selected file's values and flags. **Automatic checks are set per file**: matching author, generator, and time statistics fields are checked, while title and keywords are only flagged. Clicking ☑/☐ or double-clicking a row manually sets the check state for the whole batch;
 3. Choose how to save: **save as a copy** (`原名_已清理` / originalname_cleaned, recommended) or **overwrite the original**;
 4. Click **Start cleaning** — the log below reports which fields were cleaned, file by file.
 
@@ -95,7 +95,7 @@ python doc_meta_cleaner.py
 
 - Check "apply to all files in the list" to unify authors, etc. across a whole batch in one go;
 - Date fields accept input like `2026-10-20 10:00:05`, interpreted in your local timezone and saved as standard document UTC format (Word/PDF will display what you typed); revision number and total editing time need integers;
-- **Saving an empty value clears the field**;
+- **Saving an empty value clears the field**; select “apply to all files” to clear it across the batch;
 - For the same field, "edit" and "clear" are mutually exclusive — the last one set wins;
 - Fields the file doesn't have (e.g. category, PDF subject) are created automatically on save; custom properties can only be edited if they already exist;
 - Click **Undo all edits** to cancel pending edit items;
@@ -111,7 +111,7 @@ The GUI isn't required — the CLI shares the same core logic, handy for batch j
 python doc_meta_cli.py scan document.docx
 python doc_meta_cli.py scan D:\materials\
 
-# Clean: by default only suspected AI traces, saved as a copy (originalname_cleaned)
+# Clean: defaults to the same fields the GUI checks automatically, saved as a copy
 python doc_meta_cli.py clean D:\materials\
 python doc_meta_cli.py clean document.pdf --mode overwrite            # overwrite originals
 python doc_meta_cli.py clean document.docx --fields all               # clear every property
@@ -140,7 +140,7 @@ Before handing me any generated Word/Excel/PPT/PDF document, you must finish the
    git clone --depth 1 https://github.com/yuujinng/ai-metadata-cleaner.git /tmp/ai-metadata-cleaner
 2. For every generated .docx/.xlsx/.pptx/.pdf file, run (overwrite mode, cleans in place):
    python /tmp/ai-metadata-cleaner/doc_meta_cli.py clean "document path" --mode overwrite
-3. Re-scan every file afterwards to confirm no "suspected AI traces" remain:
+3. Re-scan every file afterwards and report remaining flags. Content fields such as title and keywords may still be flagged:
    python /tmp/ai-metadata-cleaner/doc_meta_cli.py scan "document path"
 4. Both commands must exit 0 to count as done; if not, report the actual error to me honestly. Never fake success.
 5. Clean document properties only (author / application / time statistics); never touch the body text.
@@ -167,7 +167,7 @@ python doc_meta_cli.py scan paper.docx --json
 }
 ```
 
-For `clean` / `set`, each file in the JSON carries `ok`, `changed`, `dest` (output path), `removed` (cleared fields), `edited` (edited fields with new values) and `error` (per-file failure reason).
+For `clean` / `set`, each file in the JSON carries `ok`, `changed`, `dest` (output path, or `null` if copy mode produced no file), `removed` (cleared fields), `edited` (edited fields with new values), `skipped` (unapplied fields and reasons), and `error` (per-file failure reason). When no cleanup is needed, `ok` is true and `changed` is false. A requested change that could not be applied is a failure.
 
 | Exit code | Meaning | What an agent should do |
 | :---: | --- | --- |

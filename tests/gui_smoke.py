@@ -35,6 +35,9 @@ if dmc.TkinterDnD is not None:
     assert len(app.files) == 2, '拖入文件数量不对: %d' % len(app.files)
     assert 'inner.pdf' in names, '文件夹未递归展开'
     assert 'sample copy.docx' in names, '带空格路径解析失败'
+else:
+    app._add_paths([spaced, folder])
+    app.wait_for_idle()
 
 # 崩溃日志：写入 %APPDATA%/AIMetadataCleaner/crash.log（窗口版 exe 的异常兜底）
 try:
@@ -50,15 +53,42 @@ app.current_path = docx_entry['path']
 app._refresh_values()
 
 # 自动勾选白名单：身份字段自动勾选，内容字段只标红不自动勾选
-assert app.fields['creator']['checked'] is True, '身份字段(creator)应自动勾选'
-assert not app.fields['title']['checked'], '内容字段(title)不应自动勾选'
+assert 'creator' in app._checked_keys(docx_entry), '身份字段(creator)应自动勾选'
+assert 'title' not in app._checked_keys(docx_entry), '内容字段(title)不应自动勾选'
+
+# 在两种添加顺序下，都只自动勾选真正命中的作者，预览也跟随选中文件。
+normal_doc = shutil.copy(sample, os.path.join(out, 'normal author.docx'))
+dmc.clean_file(dmc.scan_file(normal_doc), [],
+               {'creator': {'value': '张三', 'all': False, 'path': normal_doc}}, 'overwrite')
+app._add_paths([normal_doc])
+app.wait_for_idle()
+normal_entry = next(f for f in app.files if f['path'] == normal_doc)
+for _ in range(2):
+    app.files.reverse()
+    app._rebuild_fields()
+    app.current_path = normal_doc
+    app._refresh_tree()
+    assert 'creator' not in app._checked_keys(normal_entry)
+    assert 'creator' in app._checked_keys(docx_entry)
+    assert not app.tree.set('creator', 'flag') and app.tree.set('creator', 'chk') == '☐'
+app.on_clean()
+app.wait_for_idle()
+normal_copy = os.path.join(out, 'normal author_已清理.docx')
+suspect_copy = os.path.join(out, 'sample copy_已清理.docx')
+assert dmc.scan_file(normal_copy)['props']['creator'] == '张三'
+assert 'creator' not in dmc.scan_file(suspect_copy)['props']
+app._toggle('creator')
+assert all('creator' in app._checked_keys(f) for f in (normal_entry, docx_entry))
+app.batch_checks.clear()
+app.current_path = docx_entry['path']
+app._refresh_values()
 
 # 勾选清除与编辑互斥
 app._toggle('title')
-assert app.fields['title']['checked'] is True
+assert 'title' in app._checked_keys(docx_entry)
 ok, err = app._apply_edit('creator', '张三', False)
 assert ok and app.edits['creator']['value'] == '张三', (ok, err)
-assert app.fields['creator']['checked'] is False, '编辑保存后应取消该字段清除勾选'
+assert 'creator' not in app._checked_keys(docx_entry), '编辑保存后应取消该字段清除勾选'
 app._toggle('creator')  # 重新勾选清除 -> 待修改应被移除
 assert 'creator' not in app.edits, '勾选清除应移除同字段的待修改'
 
@@ -72,18 +102,17 @@ ok, err = app._apply_edit('created', '明天下午', False)
 assert not ok and err, (ok, err)
 # 留空 = 转为清除勾选
 ok, err = app._apply_edit('lastModifiedBy', '', False)
-assert ok and app.fields['lastModifiedBy']['checked'] is True, (ok, err)
+assert ok and 'lastModifiedBy' in app._checked_keys(docx_entry), (ok, err)
 print('编辑互斥/规范化/留空删除: OK, 待修改', len(app.edits), '项')
 
 # 撤销全部修改
 app.undo_edits()
 assert app.edits == {}
-assert app.fields['created']['checked'] is False, '撤销修改后不应误回清除勾选（互斥时已取消）'
-assert app.fields['lastModifiedBy']['checked'] is True, '留空转为的清除勾选不受撤销影响'
+assert 'created' in app._checked_keys(docx_entry), '撤销修改后恢复该文件的默认勾选'
+assert 'lastModifiedBy' in app._checked_keys(docx_entry), '留空转为的清除勾选不受撤销影响'
 
 # 清除 + 修改混合处理（副本模式）
 app.edits['creator'] = {'value': '张三', 'all': False, 'path': docx_entry['path']}
-app.fields['creator']['checked'] = False
 dest, removed, edited = dmc.clean_file(docx_entry, ['title'], app.edits, 'copy')
 assert os.path.basename(dest).startswith('sample copy_已清理'), dest
 assert 'title' in removed and edited == [('creator', '张三')], (removed, edited)

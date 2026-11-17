@@ -101,11 +101,11 @@ try:
     app.progress.pack(side='right', padx=(0, 10))
     app.progress.config(maximum=max(total, 1), value=0)
     snap('③ 点「开始清理」，进度条走起，日志逐个文件报告', 700)
-    checked = [k for k, v in app.fields.items() if v['checked']]
     mode = app.save_var.get()  # 'copy' 另存副本
     ok = fail = 0
     for i, f in enumerate(list(app.files), 1):
         name = os.path.basename(f['path'])
+        checked = app._checked_keys(f)
         _d, _s, skipped = dmc.collect_ops(f, checked, app.edits)
         for k, why in skipped:
             app.log('· %s：%s 跳过（%s）' % (name, dmc.field_display_name(k), why))

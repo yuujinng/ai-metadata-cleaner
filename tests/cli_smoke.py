@@ -145,6 +145,30 @@ check('clean --json 结果字段',
       and 'creator' in f0['removed'] and f0['error'] is None
       and data['summary']['ok'] == 1, f0)
 
+r = run('set', jdoc, 'title=ChatGPT 使用指南', 'creator=ChatGPT', '--mode', 'overwrite')
+assert r.returncode == 0, r.stderr
+r = run('clean', jdoc, '--json', '--mode', 'overwrite')
+check('默认清理移除可疑作者，保留同样命中规则的标题',
+      r.returncode == 0 and _json.loads(r.stdout)['files'][0]['removed'] == ['creator'])
+r = run('scan', jdoc, '--json')
+check('标题仍可扫描到并标记疑似',
+      r.returncode == 0 and 'title' in _json.loads(r.stdout)['files'][0]['suspects'])
+
+r = run('set', jdoc, 'title=应保留原值', 'custom:Missing=value',
+        '--json', '--mode', 'overwrite')
+f0 = _json.loads(r.stdout)['files'][0]
+check('不支持的写入以退出码 1 和字段明细报告，且不做部分修改',
+      r.returncode == 1 and not f0['ok'] and not f0['changed']
+      and f0['skipped'][0]['key'] == 'custom:Missing', f0)
+r = run('scan', jdoc, '--json')
+check('失败后原文件未被部分修改',
+      _json.loads(r.stdout)['files'][0]['props']['title'] == 'ChatGPT 使用指南')
+
+r = run('clean', jdoc, '--json')
+f0 = _json.loads(r.stdout)['files'][0]
+check('无适用字段是成功的无改动，不生成副本',
+      r.returncode == 0 and f0['ok'] and not f0['changed'] and f0['dest'] is None, f0)
+
 r = run('set', jdoc, 'created=明天下午', '--json', '--mode', 'overwrite')
 check('set --json 文件失败（exit 1）', r.returncode == 1, (r.returncode,))
 data = _json.loads(r.stdout)
